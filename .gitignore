@@ -1,0 +1,9 @@
+node_modules/
+.next/
+.env
+.agent-wallet.json
+ledger.json
+.provider-status.json
+report.md
+*.log
+tsconfig.tsbuildinfo
