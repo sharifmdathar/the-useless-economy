@@ -5,6 +5,7 @@
  * No payment → 402 Payment Required. Valid signed payment → the weather.
  */
 import { verifyPayment } from "@/agent/wallet";
+import type { Address } from "viem";
 
 const PRICE = "0.01";
 const ASSET = "USDC";
@@ -13,8 +14,13 @@ const PAY_TO = "0x000000000000000000000000000000000000dEaD"; // the API owner's 
 export async function GET(req: Request) {
   const city = new URL(req.url).searchParams.get("city") ?? "Unknown";
 
-  const payment = await verifyPayment(req.headers.get("X-PAYMENT"));
-  if (!payment || payment.to !== PAY_TO || Number(payment.amount) < Number(PRICE)) {
+  const payment = (await verifyPayment(req.headers.get("X-PAYMENT"))) as {
+    from: Address;
+    to: Address;
+    value?: unknown;
+    amount?: string;
+  } | null;
+  if (!payment || payment.to !== PAY_TO || Number(payment.amount ?? payment.value ?? 0) < Number(PRICE)) {
     return Response.json({ error: "Payment Required", price: PRICE, asset: ASSET, payTo: PAY_TO }, { status: 402 });
   }
 

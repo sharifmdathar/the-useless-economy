@@ -1,18 +1,26 @@
 /**
- * THE FOREMAN'S TOOLS — Week 2 build of "The Useless Economy".
+ * THE FOREMAN'S TOOLS — Week 3: the market now has real money.
  *
- * Pure TypeScript + Gemini, no crypto/viem/x402 yet (that lands in Week 3).
- * Six tools:
- *   rate_sunset / count_pigeons / pirate_translate — three distinct provider
- *     personas, each its own Gemini Flash call, input: subject/job, output: string.
- *   judge_deliverable — a SECOND, strict, independent Gemini call scoring 1-5.
- *   log_to_ledger — appends one JSON row to the append-only ledger.json.
- *   run_gig_economy — the workflow: same job to all 3 providers, judge + log
- *     all three, declare a winner.
+ * Providers are x402 sellers (EIP-3009 USDC on Base Sepolia, testnet ONLY).
+ * commission_job pays via payAndFetch; tip_provider sends a plain USDC transfer
+ * from the agent wallet; hard caps (0.05/job, 1/week) and KILL_SWITCH are
+ * enforced HERE, in code, so the LLM cannot spend past them.
  */
 import fs from "fs";
 import path from "path";
 import { GoogleGenAI } from "@google/genai";
+import {
+  createWallet,
+  createProviderWallet,
+  getWalletAddress,
+  getWalletBalance,
+  getUsdcBalance,
+  getProviderWalletAddress,
+  payAndFetch,
+  USDC_ADDRESS,
+} from "./wallet";
+import { createPublicClient, formatUnits } from "viem";
+import { baseSepolia } from "viem/chains";
 
 export type Tool = {
   name: string;
@@ -26,10 +34,42 @@ export type Tool = {
 export const MODEL = process.env.GEMINI_MODEL || "gemini-flash-latest";
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
+// ─── Week 3 constants (caps live here, not in prompts) ───
+const MAX_PER_JOB = 0.05; // USDC hard cap per job
+const WEEKLY_CAP = 1; // USDC hard cap per rolling 7 days
+
+/** Rolling 7-day spend from ledger.json (paid + tips). */
+function weekSpend(): number {
+  const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  try {
+    const rows = JSON.parse(fs.readFileSync(LEDGER_PATH, "utf8")) as { ts: string; paidAmount?: number; tipUsdc?: number }[];
+    return rows
+      .filter((r) => new Date(r.ts).getTime() >= cutoff)
+      .reduce((s, r) => s + (r.paidAmount ?? 0) + (r.tipUsdc ?? 0), 0);
+  } catch {
+    return 0;
+  }
+}
+
+function budgetGuard(kind: "commission" | "tip", amount: number) {
+  if (process.env.KILL_SWITCH === "1") throw new Error("KILL_SWITCH is set — the economy is frozen. No payments this run.");
+  if (amount > MAX_PER_JOB) throw new Error(`${amount} USDC exceeds the ${MAX_PER_JOB} per-job cap. Job refused.`);
+  const spent = weekSpend();
+  if (spent + amount > WEEKLY_CAP) {
+    throw new Error(`Weekly budget of ${WEEKLY_CAP} USDC would be breached (spent ${spent.toFixed(4)} + ${amount}). Refusing.`);
+  }
+}
+
+// Week-3 provider registry: the API routes under app/providers/* are the x402 sellers.
+const PROVIDER_PATHS: Record<string, { path: string; jobType: string; floor: number; ask: number }> = {
+  soleil: { path: "/providers/rate-sunset", jobType: "rate-sunset", floor: 0.03, ask: 0.05 },
+  feathers: { path: "/providers/count-pigeons", jobType: "count-pigeons", floor: 0.005, ask: 0.01 },
+  capn: { path: "/providers/pirate-translate", jobType: "pirate-translate", floor: 0.02, ask: 0.02 },
+};
+
 /**
- * One Gemini call per provider persona.
- * Kept small and single-purpose so each provider can be split into its own
- * HTTP service (Week 3) without touching the persona text.
+ * One Gemini call per provider persona (kept for the judge and for
+ * non-HTTP fallback persona calls).
  */
 async function callProvider(persona: string, prompt: string): Promise<string> {
   const res = await ai.models.generateContent({
@@ -130,9 +170,74 @@ and no other text: {"score": <1-5>, "feedback": "<one cutting or pleased sentenc
 export type Judgement = { score: number; feedback: string };
 
 /**
- * The judge is deliberately a separate Gemini call with its own system prompt,
- * never the provider's voice. Falls back to a length heuristic without a key.
+ * The ledger: append-only, at repo root. Tip updates ride on the paid row.
+ * Serialized on a module-level queue so concurrent requests can't clobber it.
  */
+export type LedgerEntry = {
+  ts: string;
+  job: string;
+  provider: string;
+  deliverable: string;
+  score: number; // 1-5 from the judge
+  feedback: string;
+  quotedPrice?: number; // provider's asking price
+  paidAmount?: number; // what actually settled
+  txHash?: string; // x402 settlement tx or tip transfer tx
+  tipUsdc?: number; // gratuity on top
+};
+
+const LEDGER_PATH = path.join(process.cwd(), "ledger.json");
+
+let queue: Promise<unknown> = Promise.resolve();
+function serialized<T>(fn: () => T): Promise<T> {
+  const next = queue.then(fn, fn);
+  queue = next.catch(() => {});
+  return next;
+}
+
+export async function logToLedger(entry: Omit<LedgerEntry, "ts">): Promise<LedgerEntry[]> {
+  return serialized(() => {
+    let entries: LedgerEntry[] = [];
+    try {
+      entries = JSON.parse(fs.readFileSync(LEDGER_PATH, "utf8"));
+    } catch {
+      entries = []; // first run or corrupt file: start clean rather than crash
+    }
+    entries.push({ ...entry, ts: new Date().toISOString() });
+    fs.writeFileSync(LEDGER_PATH, JSON.stringify(entries, null, 2) + "\n");
+    return entries;
+  });
+}
+
+/** Add a tip (and optionally its transfer txHash) to a provider's most recent PAID row. */
+export async function applyTip(provider: string, tipUsdc: number, txHash?: string): Promise<LedgerEntry | null> {
+  return serialized(() => {
+    let entries: LedgerEntry[] = [];
+    try {
+      entries = JSON.parse(fs.readFileSync(LEDGER_PATH, "utf8"));
+    } catch {
+      return null;
+    }
+    for (let i = entries.length - 1; i >= 0; i--) {
+      const row = entries[i];
+      if (row.provider === provider && (row.paidAmount ?? 0) > 0) {
+        row.tipUsdc = (row.tipUsdc ?? 0) + tipUsdc;
+        if (txHash) row.txHash = txHash;
+        fs.writeFileSync(LEDGER_PATH, JSON.stringify(entries, null, 2) + "\n");
+        return row;
+      }
+    }
+    return null;
+  });
+}
+
+function readLedger(): LedgerEntry[] {
+  try {
+    return JSON.parse(fs.readFileSync(LEDGER_PATH, "utf8"));
+  } catch {
+    return [];
+  }
+}
 async function judge(providerName: string, deliverableText: string): Promise<Judgement> {
   const prompt = `Provider: ${providerName}
 Deliverable to judge:
@@ -156,54 +261,9 @@ ${deliverableText}`;
   return { score: byLength, feedback: "Scored by fallback heuristic (judge JSON unparseable)." };
 }
 
-// ─── 3. THE LEDGER ───
-
-export type LedgerEntry = {
-  ts: string; // ISO timestamp
-  job: string;
-  provider: string; // soleil | feathers | capn
-  deliverable: string;
-  score: number; // 1-5 from the judge
-  feedback: string;
-};
-
-const LEDGER_PATH = path.join(process.cwd(), "ledger.json");
-
-/** Append-only: read → push → write, serialized on a module-level queue
- * so concurrent Next.js dev requests cannot clobber ledger.json. */
-let queue: Promise<unknown> = Promise.resolve();
-function serialized<T>(fn: () => T): Promise<T> {
-  const next = queue.then(fn, fn);
-  queue = next.catch(() => {});
-  return next;
-}
-
-export async function logToLedger(entry: Omit<LedgerEntry, "ts">): Promise<LedgerEntry[]> {
-  return serialized(() => {
-    let entries: LedgerEntry[] = [];
-    try {
-      entries = JSON.parse(fs.readFileSync(LEDGER_PATH, "utf8"));
-    } catch {
-      entries = []; // first run or corrupt file: start clean rather than crash
-    }
-    const row: LedgerEntry = { ...entry, ts: new Date().toISOString() };
-    entries.push(row);
-    fs.writeFileSync(LEDGER_PATH, JSON.stringify(entries, null, 2) + "\n");
-    return entries;
-  });
-}
-
-function readLedger(): LedgerEntry[] {
-  try {
-    return JSON.parse(fs.readFileSync(LEDGER_PATH, "utf8"));
-  } catch {
-    return [];
-  }
-}
-
 // ─── 4. THE EXPORTED TOOL LIST (what Gemini can call) ───
 
-export const tools: Tool[] = [
+export const coreTools: Tool[] = [
   ...providerTools,
 
   {
@@ -216,12 +276,24 @@ export const tools: Tool[] = [
         provider_name: { type: "string", enum: ["soleil", "feathers", "capn"], description: "Which provider made the deliverable" },
         deliverable_text: { type: "string", description: "The exact deliverable text to judge" },
         job: { type: "string", description: "The original job/subject, for the ledger row" },
+        quotedPrice: { type: "number", description: "Provider's asking price in USDC (0 if free run)" },
+        paidAmount: { type: "number", description: "What actually settled in USDC (0 if free run)" },
+        txHash: { type: "string", description: "x402 settlement tx hash, if paid" },
       },
       required: ["provider_name", "deliverable_text"],
     },
-    run: async ({ provider_name, deliverable_text, job = "" }) => {
+    run: async ({ provider_name, deliverable_text, job = "", quotedPrice = 0, paidAmount = 0, txHash }) => {
       const judgement = await judge(provider_name, deliverable_text);
-      const ledger = await logToLedger({ job, provider: provider_name, deliverable: deliverable_text, ...judgement });
+      const ledger = await logToLedger({
+        job,
+        provider: provider_name,
+        deliverable: deliverable_text,
+        ...judgement,
+        quotedPrice,
+        paidAmount,
+        ...(txHash ? { txHash } : {}),
+        tipUsdc: 0,
+      });
       return { provider: provider_name, ...judgement, ledgerRows: ledger.length };
     },
   },
@@ -291,3 +363,263 @@ export const tools: Tool[] = [
     },
   },
 ];
+
+// ─── WEEK 3 TOOLS: money on-chain (Base Sepolia, TESTNET ONLY) ───
+
+export const paidTools: Tool[] = [
+  {
+    name: "commission_job",
+    description:
+      "Commission a provider over HTTP and PAY for it over x402 (USDC on Base Sepolia, testnet). Params: provider (soleil|feathers|capn), job, optional counterOffer (USDC) for one round of negotiating. Negotation: below the provider's floor the offer is auto-rejected; at/above it the provider accepts the lower price. Refuses anything above 0.05 USDC or the weekly cap, and everything if KILL_SWITCH=1.",
+    parameters: {
+      type: "object",
+      properties: {
+        provider: { type: "string", enum: ["soleil", "feathers", "capn"] },
+        job: { type: "string", description: "What to do, e.g. 'rate the sunset over the Tagus in Lisbon'" },
+        counterOffer: { type: "number", description: "Optional manager counter-offer in USDC" },
+      },
+      required: ["provider", "job"],
+    },
+    run: async ({ provider, job, counterOffer }, { baseUrl }) => {
+      const meta = PROVIDER_PATHS[provider];
+      if (!meta) throw new Error(`Unknown provider ${provider}. Valid: soleil, feathers, capn`);
+      if (process.env.KILL_SWITCH === "1") throw new Error("KILL_SWITCH is set — the economy is frozen.");
+      if (counterOffer != null) {
+        budgetGuard("commission", counterOffer);
+        if (counterOffer < meta.floor) {
+          return { provider, negotiated: false, outcome: "REJECTED", reason: `Your counter-offer ${counterOffer} USDC is below ${provider}'s floor of ${meta.floor}.` };
+        }
+        if (counterOffer >= meta.ask) {
+          return { provider, negotiated: false, note: "Counter-offer at or above the ask — just pay the ask." };
+        }
+      }
+      budgetGuard("commission", meta.ask);
+
+      // Phase 1: ask price attempt; Phase 3 (PAYWALL=1): real 402 -> settle.
+      const askUrl = `${baseUrl}${meta.path}?${buildParams(provider, job)}&price=${meta.ask}`;
+      const first = await payAndFetch(askUrl, { maxPrice: MAX_PER_JOB });
+      // Free-run mode (PAYWALL off): the first response is the deliverable itself.
+      if ((first.payment as { status?: string } | undefined)?.status !== "settled" && !(first.payment as { httpStatus?: number } | undefined)?.httpStatus) {
+        return { provider, job, negotiated: false, paid: 0, deliverable: first.data };
+      }
+
+      // PAYWALL on: if a counter-offer was accepted by the floors above, retry at lower price.
+      if (counterOffer != null && counterOffer < meta.ask) {
+        const counterUrl = `${baseUrl}${meta.path}?${buildParams(provider, job)}&price=${counterOffer}`;
+        const second = await payAndFetch(counterUrl, { maxPrice: MAX_PER_JOB });
+        if ((second.payment as { status?: string } | undefined)?.status === "settled") {
+          return {
+            provider,
+            job,
+            negotiated: true,
+            counterOffer,
+            paid: counterOffer,
+            tx: (second.payment as { tx?: string }).tx,
+            deliverable: second.data,
+          };
+        }
+        return { provider, job, negotiated: false, outcome: "REJECTED", detail: second.payment };
+      }
+
+      // No counter: settle at the ask (payAndFetch already signed + retried).
+      if ((first.payment as { status?: string } | undefined)?.status === "settled") {
+        return {
+          provider,
+          job,
+          negotiated: false,
+          paid: meta.ask,
+          tx: (first.payment as { tx?: string }).tx,
+          deliverable: first.data,
+        };
+      }
+      return { provider, job, outcome: "REJECTED", detail: first.payment };
+    },
+  },
+
+  {
+    name: "tip_provider",
+    description:
+      "Send an on-chain USDC tip from the agent wallet to a provider (Base Sepolia TESTNET). Refuses above the 0.05 per-job cap or if the weekly cap would be breached. Returns the transfer tx hash and updates the ledger row.",
+    parameters: {
+      type: "object",
+      properties: {
+        provider: { type: "string", enum: ["soleil", "feathers", "capn"] },
+        amountUsdc: { type: "number", description: "Tip in USDC, e.g. 0.005" },
+      },
+      required: ["provider", "amountUsdc"],
+    },
+    run: async ({ provider, amountUsdc }) => {
+      if (!getWalletAddress()) throw new Error("No agent wallet yet — create one first.");
+      budgetGuard("tip", amountUsdc);
+      if (amountUsdc <= 0) throw new Error("Tip must be positive.");
+
+      const envSink = process.env.PROVIDER_PAY_TO_OVERRIDE as `0x${string}` | undefined;
+      const to = envSink ?? getProviderWalletAddress();
+      if (!to) throw new Error("No provider wallet to tip. PROVIDER_PAY_TO_OVERRIDE or createProviderWallet() first.");
+
+      const { privateKeyToAccount } = await import("viem/accounts");
+      const { createWalletClient, http } = await import("viem");
+      const key = process.env.WALLET_PRIVATE_KEY
+        ? (process.env.WALLET_PRIVATE_KEY.trim() as `0x${string}`)
+        : ((JSON.parse(fs.readFileSync(path.join(process.cwd(), ".agent-wallet.json"), "utf8")) as { privateKey: `0x${string}` }).privateKey.trim() as `0x${string}`);
+      // Never log the key — it is only used to sign locally.
+      const account = privateKeyToAccount(key);
+      const client = createWalletClient({ account, chain: baseSepolia, transport: http() });
+      const tx = await client.writeContract({
+        address: USDC_ADDRESS,
+        abi: [
+          {
+            name: "transfer",
+            type: "function",
+            stateMutability: "nonpayable",
+            inputs: [
+              { name: "to", type: "address" },
+              { name: "value", type: "uint256" },
+            ],
+            outputs: [],
+          },
+        ] as const,
+        functionName: "transfer",
+        args: [to, BigInt(Math.round(amountUsdc * 10 ** 6))],
+      });
+
+      const row = await applyTip(provider, amountUsdc, tx);
+      return {
+        provider,
+        tipped: amountUsdc,
+        to,
+        txHash: tx,
+        ledgerRow: row,
+        note: "On-chain USDC transfer submitted on Base Sepolia (testnet).",
+      };
+    },
+  },
+
+  {
+    name: "set_provider_status",
+    description:
+      "Blacklist or re-activate a provider after bad work. Blacklisted providers are refused by commission. Params: provider (soleil|feathers|capn), status (active|blacklisted).",
+    parameters: {
+      type: "object",
+      properties: {
+        provider: { type: "string", enum: ["soleil", "feathers", "capn"] },
+        status: { type: "string", enum: ["active", "blacklisted"] },
+      },
+      required: ["provider", "status"],
+    },
+    run: async ({ provider, status }) => {
+      const file = path.join(process.cwd(), ".provider-status.json");
+      let statuses: Record<string, string> = {};
+      try {
+        statuses = JSON.parse(fs.readFileSync(file, "utf8"));
+      } catch {
+        // first write
+      }
+      statuses[provider] = status;
+      fs.writeFileSync(file, JSON.stringify(statuses, null, 2) + "\n");
+      return { provider, status };
+    },
+  },
+
+  {
+    name: "read_ledger",
+    description: "Read the full ledger.json (append-only): every commission, score, tip in the economy. Also returns weekly spend.",
+    parameters: { type: "object", properties: {} },
+    run: async () => ({ entries: readLedger(), weeklySpend: weekSpend() }),
+  },
+
+  {
+    name: "generate_report",
+    description: "Write the weekly 'State of the Useless Economy' report to report.md (totals, avg price, leaderboard, incidents) and return its path.",
+    parameters: { type: "object", properties: {} },
+    run: async () => {
+      const entries = readLedger();
+      const judged = entries.filter((e) => typeof e.score === "number");
+      const totalSpend = entries.reduce((s, e) => s + (e.paidAmount ?? 0) + (e.tipUsdc ?? 0), 0);
+      const perProvider = new Map<string, { jobs: number; spend: number; scoreSum: number; tips: number }>();
+      for (const e of judged) {
+        const row = perProvider.get(e.provider) ?? { jobs: 0, spend: 0, scoreSum: 0, tips: 0 };
+        row.jobs += 1;
+        row.spend += (e.paidAmount ?? 0) + (e.tipUsdc ?? 0);
+        row.scoreSum += e.score;
+        row.tips += e.tipUsdc ?? 0;
+        perProvider.set(e.provider, row);
+      }
+      const leaderboard = [...perProvider.entries()]
+        .sort((a, b) => b[1].scoreSum / b[1].jobs - a[1].scoreSum / a[1].jobs)
+        .map(([provider, r]) => ({ provider, avgScore: r.scoreSum / r.jobs, jobs: r.jobs, spend: r.spend, tips: r.tips }));
+      const incidents = judged
+        .filter((e) => e.score <= 2)
+        .map((e) => ({ ts: e.ts, provider: e.provider, score: e.score, feedback: e.feedback }));
+      const reportPath = path.join(process.cwd(), "report.md");
+      fs.writeFileSync(
+        reportPath,
+        [
+          "# State of the Useless Economy",
+          "",
+          `Generated: ${new Date().toISOString()}`,
+          `Total judged jobs: ${judged.length}`,
+          `Total spend: ${totalSpend.toFixed(4)} USDC (caps: ${MAX_PER_JOB}/job, ${WEEKLY_CAP}/week)`,
+          "",
+          "## Leaderboard",
+          "",
+          "| provider | jobs | avg score | spend | tips |",
+          "|---|---:|---:|---:|---:|",
+          ...leaderboard.map((l) => `| ${l.provider} | ${l.jobs} | ${l.avgScore.toFixed(1)} | ${l.spend.toFixed(4)} | ${l.tips.toFixed(4)} |`),
+          "",
+          "## Incidents (score <= 2)",
+          "",
+          ...(incidents.length ? incidents.map((i) => `- ${i.ts} ${i.provider}: ${i.score}/5 — ${i.feedback}`) : ["- none"]),
+          "",
+        ].join("\n"),
+      );
+      return { reportPath, judgedJobs: judged.length, leaderboard, incidents };
+    },
+  },
+
+  {
+    name: "create_provider_wallet",
+    description:
+      "Create (or reuse) the ON-DISK provider settlement wallet so tips/x402 payments land somewhere observable. Returns the address. Testnet ONLY.",
+    parameters: { type: "object", properties: {} },
+    run: async () => ({ address: createProviderWallet() }),
+  },
+
+  {
+    name: "get_provider_balances",
+    description: "On-chain USDC balances (testnet) for the settlement/provider wallet and the agent wallet — proves payments arrived.",
+    parameters: { type: "object", properties: {} },
+    run: async () => {
+      const prov = getProviderWalletAddress();
+      const agent = getWalletAddress();
+      const balances: Record<string, string> = {};
+      if (prov) balances.provider = await getUsdcBalance(prov);
+      if (agent) balances.agent = await getUsdcBalance(agent as `0x${string}`);
+      return { addresses: { provider: prov, agent }, usdcBalances: balances, network: "Base Sepolia (testnet)" };
+    },
+  },
+
+  {
+    name: "get_my_wallet",
+    description: "Get the agent's own wallet address, ETH and USDC balances on Base Sepolia (testnet). Creates nothing.",
+    parameters: { type: "object", properties: {} },
+    run: async () => {
+      if (!getWalletAddress()) throw new Error("No wallet yet. Ask the user to click 'Create wallet' in the UI first.");
+      return {
+        address: getWalletAddress(),
+        eth: await getWalletBalance(),
+        usdc: await getUsdcBalance(getWalletAddress() as `0x${string}`),
+        network: "Base Sepolia (testnet)",
+      };
+    },
+  },
+];
+
+/** Query-string per provider job type. */
+function buildParams(provider: string, job: string): string {
+  if (provider === "capn") return `text=${encodeURIComponent(job)}`;
+  return `location=${encodeURIComponent(job)}&request=${encodeURIComponent(job)}`;
+}
+
+/** The full tool surface the agent sees: free persona tools + judge/ledger + paid tools. */
+export const tools: Tool[] = [...coreTools, ...paidTools];

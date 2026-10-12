@@ -6,6 +6,15 @@ The template is intentionally small. You will spend almost all of your time in a
 
 ## What You Get
 
+This fork builds **The Useless Economy** on top of the agentmaxxing kit: a manager
+agent ("the Foreman") that hires three AI provider agents over x402 to do useless
+jobs (rate sunsets, count pigeons, pirate translations), judges the work 1-5,
+tips or blacklists providers, keeps an append-only `ledger.json`, and publishes a
+weekly report. See `ARCHITECTURE.md`. Hard caps (0.05 USDC/job, 1 USDC/week) and
+`KILL_SWITCH` are enforced in code. **Base Sepolia testnet only.**
+
+## What You Get (from the base kit)
+
 1. A working agent loop that sends your message to Gemini, runs any tools Gemini asks for, and returns the final answer.
 2. A tools file where you add, remove, or change the functions your agent can use.
 3. An agent wallet that can sign payments, based on the x402 payment pattern.
@@ -151,6 +160,10 @@ All settings live in the `.env` file.
 | `GEMINI_API_KEY` | Yes | Your Gemini API key. |
 | `GEMINI_MODEL` | No | The Gemini model to use. Defaults to `gemini-flash-latest`. |
 | `WALLET_PRIVATE_KEY` | No | Use an existing wallet instead of the Create wallet button. A private key starting with `0x`. When set, it takes priority over `.agent-wallet.json`. |
+| `PAYWALL` | No | `1` = provider routes activate their real x402 walls (402 → sign → settle). Default off (free-economy mode). |
+| `KILL_SWITCH` | No | `1` = the Foreman freezes; commissions and tips refuse to pay. |
+| `PROVIDER_PRIVATE_KEY` | No | Settlement wallet key for the x402 seller side. Leave unset to generate `.provider-wallet.json` via the `create_provider_wallet` tool. |
+| `PROVIDER_PAY_TO_OVERRIDE` | No | Force all provider payTo/tip destinations to one address. |
 
 Restart `npm run dev` after changing any value in `.env`.
 

@@ -33,7 +33,7 @@
   TypeScript tools — rate_sunset/count_pigeons/pirate_translate as inline Gemini
   calls in agent/tools.ts, judge_deliverable (strict 1-5, {score, feedback}),
   log_to_ledger (append-only ledger.json), and run_gig_economy (job -> all 3
-  providers -> judge all 3 -> log -> winner summary). agentes loop restored to
+  providers -> judge all 3 -> log -> winner summary). agent loop restored to
   the kit's simple design with MAX_STEPS=10 and the Foreman system prompt.
   The earlier HTTP provider routes + lib/* market modules stay in the repo for
   Week 3 (x402), but the active tool surface is now exactly the Week-2 spec —
@@ -42,3 +42,35 @@
   for inference ("Your project has been denied access"; ListModels 200 but every
   generateContent 403). All live persona runs are blocked until the user creates
   a fresh AI Studio key/project. Typecheck + build verified clean meanwhile.
+- **2026-10-13 — Week 3 payment scheme:** the kit's payAndFetch/verifyPayment sign a
+  custom JSON blob; that never goes on-chain and is not what the public x402
+  facilitator validates. Implementing the real flow instead: buyer signs an
+  EIP-3009 transferWithAuthorization (USDC on Base Sepolia), seller verifies the
+  signature locally and settles on-chain, then returns X-PAYMENT-RESPONSE with the
+  tx hash. Facilitator keeps being hit for scheme validation only.
+- **2026-10-13 — Testnet-only guard:** Testnet-only: never mainnet; chain pinned to
+  baseSepolia in every viem client; no key ever logged or echoed; .agent-wallet.json
+  gitignored; kill switch + caps enforced in tool code, not in prompts.
+- **2026-10-13 — payTo placeholder addresses:** registry ships 0x...01/02/03 as
+  Soleil/Feathers/Cap'n payTo defaults. These are NOT real wallets; a real
+  deployment sets PROVIDER_PAY_TO_OVERRIDE in .env (single sink) or edits the
+  registry after creating .provider-wallet.json via the new createProviderWallet
+  helper. The test "provider balance rises" therefore checks whatever address the
+  requirement advertised and was actually settled to.
+- **2026-10-13 — Week 3 x402 flow verified at the wire level:** with PAYWALL=1,
+  curl tests against /providers/rate-sunset confirmed: (a) unpaid call -> real
+  x402 402 with {scheme, price, asset=Base Sepolia USDC, payTo, facilitator};
+  (b) forged X-PAYMENT -> 402 "Invalid authorization" (verifyTypedData rejects);
+  (c) a genuinely signed EIP-3009 authorization from a throwaway buyer key passed
+  local verification and reached the on-chain settle call, reverting ONLY because
+  the settlement wallet has zero testnet ETH ("gas required exceeds allowance");
+  (d) a genuinely signed below-floor payment -> 402 "Payment below persona floor"
+  (0.005 < Soleil's 0.03). The throwaway buyer key (all-ones test vector, no
+  funds) was used only in /tmp for these wire tests, never registered as the
+  agent's wallet, and the test script was deleted after use — agent keys still
+  come only from .agent-wallet.json/.env per the charter.
+- **2026-10-13 — Settlement wallet zero-gas limitation:** the full on-chain
+  settlement (txHash in ledger, provider balance rises) requires the settlement
+  wallet to hold Base Sepolia ETH for gas and the agent wallet to hold testnet
+  USDC; both are faucet steps only the user can perform. Code path is verified
+  up to the contract call and the revert was handled cleanly (502 with reason).
