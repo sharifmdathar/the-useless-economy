@@ -42,7 +42,11 @@ const WEEKLY_CAP = 1; // USDC hard cap per rolling 7 days
 function weekSpend(): number {
   const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
   try {
-    const rows = JSON.parse(fs.readFileSync(LEDGER_PATH, "utf8")) as { ts: string; paidAmount?: number; tipUsdc?: number }[];
+    const rows = JSON.parse(fs.readFileSync(LEDGER_PATH, "utf8")) as {
+      ts: string;
+      paidAmount?: number;
+      tipUsdc?: number;
+    }[];
     return rows
       .filter((r) => new Date(r.ts).getTime() >= cutoff)
       .reduce((s, r) => s + (r.paidAmount ?? 0) + (r.tipUsdc ?? 0), 0);
@@ -52,19 +56,45 @@ function weekSpend(): number {
 }
 
 function budgetGuard(kind: "commission" | "tip", amount: number) {
-  if (process.env.KILL_SWITCH === "1") throw new Error("KILL_SWITCH is set — the economy is frozen. No payments this run.");
-  if (amount > MAX_PER_JOB) throw new Error(`${amount} USDC exceeds the ${MAX_PER_JOB} per-job cap. Job refused.`);
+  if (process.env.KILL_SWITCH === "1")
+    throw new Error(
+      "KILL_SWITCH is set — the economy is frozen. No payments this run.",
+    );
+  if (amount > MAX_PER_JOB)
+    throw new Error(
+      `${amount} USDC exceeds the ${MAX_PER_JOB} per-job cap. Job refused.`,
+    );
   const spent = weekSpend();
   if (spent + amount > WEEKLY_CAP) {
-    throw new Error(`Weekly budget of ${WEEKLY_CAP} USDC would be breached (spent ${spent.toFixed(4)} + ${amount}). Refusing.`);
+    throw new Error(
+      `Weekly budget of ${WEEKLY_CAP} USDC would be breached (spent ${spent.toFixed(4)} + ${amount}). Refusing.`,
+    );
   }
 }
 
 // Week-3 provider registry: the API routes under app/providers/* are the x402 sellers.
-const PROVIDER_PATHS: Record<string, { path: string; jobType: string; floor: number; ask: number }> = {
-  soleil: { path: "/providers/rate-sunset", jobType: "rate-sunset", floor: 0.03, ask: 0.05 },
-  feathers: { path: "/providers/count-pigeons", jobType: "count-pigeons", floor: 0.005, ask: 0.01 },
-  capn: { path: "/providers/pirate-translate", jobType: "pirate-translate", floor: 0.02, ask: 0.02 },
+const PROVIDER_PATHS: Record<
+  string,
+  { path: string; jobType: string; floor: number; ask: number }
+> = {
+  soleil: {
+    path: "/providers/rate-sunset",
+    jobType: "rate-sunset",
+    floor: 0.03,
+    ask: 0.05,
+  },
+  feathers: {
+    path: "/providers/count-pigeons",
+    jobType: "count-pigeons",
+    floor: 0.005,
+    ask: 0.01,
+  },
+  capn: {
+    path: "/providers/pirate-translate",
+    jobType: "pirate-translate",
+    floor: 0.02,
+    ask: 0.02,
+  },
 };
 
 /**
@@ -106,7 +136,10 @@ export const providerTools: Tool[] = [
     parameters: {
       type: "object",
       properties: {
-        subject: { type: "string", description: "What sunset to rate, e.g. 'sunset over Lisbon tonight'" },
+        subject: {
+          type: "string",
+          description: "What sunset to rate, e.g. 'sunset over Lisbon tonight'",
+        },
       },
       required: ["subject"],
     },
@@ -123,7 +156,11 @@ export const providerTools: Tool[] = [
     parameters: {
       type: "object",
       properties: {
-        subject: { type: "string", description: "What pigeon scene to count, e.g. 'pigeons at Trafalgar Square'" },
+        subject: {
+          type: "string",
+          description:
+            "What pigeon scene to count, e.g. 'pigeons at Trafalgar Square'",
+        },
       },
       required: ["subject"],
     },
@@ -140,7 +177,10 @@ export const providerTools: Tool[] = [
     parameters: {
       type: "object",
       properties: {
-        subject: { type: "string", description: "The text to translate into pirate speech" },
+        subject: {
+          type: "string",
+          description: "The text to translate into pirate speech",
+        },
       },
       required: ["subject"],
     },
@@ -195,7 +235,9 @@ function serialized<T>(fn: () => T): Promise<T> {
   return next;
 }
 
-export async function logToLedger(entry: Omit<LedgerEntry, "ts">): Promise<LedgerEntry[]> {
+export async function logToLedger(
+  entry: Omit<LedgerEntry, "ts">,
+): Promise<LedgerEntry[]> {
   return serialized(() => {
     let entries: LedgerEntry[] = [];
     try {
@@ -210,7 +252,11 @@ export async function logToLedger(entry: Omit<LedgerEntry, "ts">): Promise<Ledge
 }
 
 /** Add a tip (and optionally its transfer txHash) to a provider's most recent PAID row. */
-export async function applyTip(provider: string, tipUsdc: number, txHash?: string): Promise<LedgerEntry | null> {
+export async function applyTip(
+  provider: string,
+  tipUsdc: number,
+  txHash?: string,
+): Promise<LedgerEntry | null> {
   return serialized(() => {
     let entries: LedgerEntry[] = [];
     try {
@@ -238,7 +284,10 @@ function readLedger(): LedgerEntry[] {
     return [];
   }
 }
-async function judge(providerName: string, deliverableText: string): Promise<Judgement> {
+async function judge(
+  providerName: string,
+  deliverableText: string,
+): Promise<Judgement> {
   const prompt = `Provider: ${providerName}
 Deliverable to judge:
 ${deliverableText}`;
@@ -258,7 +307,10 @@ ${deliverableText}`;
     // fall through to heuristic
   }
   const byLength = deliverableText.trim().length < 60 ? 2 : 4;
-  return { score: byLength, feedback: "Scored by fallback heuristic (judge JSON unparseable)." };
+  return {
+    score: byLength,
+    feedback: "Scored by fallback heuristic (judge JSON unparseable).",
+  };
 }
 
 // ─── 4. THE EXPORTED TOOL LIST (what Gemini can call) ───
@@ -273,16 +325,42 @@ export const coreTools: Tool[] = [
     parameters: {
       type: "object",
       properties: {
-        provider_name: { type: "string", enum: ["soleil", "feathers", "capn"], description: "Which provider made the deliverable" },
-        deliverable_text: { type: "string", description: "The exact deliverable text to judge" },
-        job: { type: "string", description: "The original job/subject, for the ledger row" },
-        quotedPrice: { type: "number", description: "Provider's asking price in USDC (0 if free run)" },
-        paidAmount: { type: "number", description: "What actually settled in USDC (0 if free run)" },
-        txHash: { type: "string", description: "x402 settlement tx hash, if paid" },
+        provider_name: {
+          type: "string",
+          enum: ["soleil", "feathers", "capn"],
+          description: "Which provider made the deliverable",
+        },
+        deliverable_text: {
+          type: "string",
+          description: "The exact deliverable text to judge",
+        },
+        job: {
+          type: "string",
+          description: "The original job/subject, for the ledger row",
+        },
+        quotedPrice: {
+          type: "number",
+          description: "Provider's asking price in USDC (0 if free run)",
+        },
+        paidAmount: {
+          type: "number",
+          description: "What actually settled in USDC (0 if free run)",
+        },
+        txHash: {
+          type: "string",
+          description: "x402 settlement tx hash, if paid",
+        },
       },
       required: ["provider_name", "deliverable_text"],
     },
-    run: async ({ provider_name, deliverable_text, job = "", quotedPrice = 0, paidAmount = 0, txHash }) => {
+    run: async ({
+      provider_name,
+      deliverable_text,
+      job = "",
+      quotedPrice = 0,
+      paidAmount = 0,
+      txHash,
+    }) => {
       const judgement = await judge(provider_name, deliverable_text);
       const ledger = await logToLedger({
         job,
@@ -294,7 +372,11 @@ export const coreTools: Tool[] = [
         ...(txHash ? { txHash } : {}),
         tipUsdc: 0,
       });
-      return { provider: provider_name, ...judgement, ledgerRows: ledger.length };
+      return {
+        provider: provider_name,
+        ...judgement,
+        ledgerRows: ledger.length,
+      };
     },
   },
 
@@ -314,7 +396,13 @@ export const coreTools: Tool[] = [
       required: ["job", "provider", "deliverable", "score", "feedback"],
     },
     run: async ({ job, provider, deliverable, score, feedback }) => {
-      const ledger = await logToLedger({ job, provider, deliverable, score: Math.round(score), feedback });
+      const ledger = await logToLedger({
+        job,
+        provider,
+        deliverable,
+        score: Math.round(score),
+        feedback,
+      });
       return { logged: true, ledgerRows: ledger.length };
     },
   },
@@ -326,16 +414,29 @@ export const coreTools: Tool[] = [
     parameters: {
       type: "object",
       properties: {
-        job: { type: "string", description: "The useless job, e.g. 'a golden sunset over the Tagus, Lisbon'" },
+        job: {
+          type: "string",
+          description:
+            "The useless job, e.g. 'a golden sunset over the Tagus, Lisbon'",
+        },
       },
       required: ["job"],
     },
     run: async ({ job }) => {
       // 1. Commission all three providers (sequential to keep dev free-tier happy).
       const deliverables: Record<string, string> = {
-        soleil: await callProvider(SOLEIL_PERSONA, `Rate this sunset, in character: ${job}`),
-        feathers: await callProvider(FEATHERS_PERSONA, `Count the pigeons in this scene, in character: ${job}`),
-        capn: await callProvider(CAPN_PERSONA, `Translate this text into pirate speech, in character: "${job}"`),
+        soleil: await callProvider(
+          SOLEIL_PERSONA,
+          `Rate this sunset, in character: ${job}`,
+        ),
+        feathers: await callProvider(
+          FEATHERS_PERSONA,
+          `Count the pigeons in this scene, in character: ${job}`,
+        ),
+        capn: await callProvider(
+          CAPN_PERSONA,
+          `Translate this text into pirate speech, in character: "${job}"`,
+        ),
       };
 
       // 2. Judge each deliverable with the strict, independent prompt.
@@ -347,16 +448,31 @@ export const coreTools: Tool[] = [
       // 3. Log every row to the append-only ledger.
       let ledgerRows = 0;
       for (const [provider, deliverable] of Object.entries(deliverables)) {
-        const ledger = await logToLedger({ job, provider, deliverable, ...judgements[provider] });
+        const ledger = await logToLedger({
+          job,
+          provider,
+          deliverable,
+          ...judgements[provider],
+        });
         ledgerRows = ledger.length;
       }
 
       // 4. Rank and summarize.
-      const ranked = Object.entries(judgements).sort((a, b) => b[1].score - a[1].score);
+      const ranked = Object.entries(judgements).sort(
+        (a, b) => b[1].score - a[1].score,
+      );
       const [winner, winnerJudgement] = ranked[0];
       return {
-        winner: { provider: winner, score: winnerJudgement.score, feedback: winnerJudgement.feedback },
-        standings: ranked.map(([provider, j]) => ({ provider, score: j.score, feedback: j.feedback })),
+        winner: {
+          provider: winner,
+          score: winnerJudgement.score,
+          feedback: winnerJudgement.feedback,
+        },
+        standings: ranked.map(([provider, j]) => ({
+          provider,
+          score: j.score,
+          feedback: j.feedback,
+        })),
         deliverables,
         ledgerRows,
       };
@@ -375,22 +491,42 @@ export const paidTools: Tool[] = [
       type: "object",
       properties: {
         provider: { type: "string", enum: ["soleil", "feathers", "capn"] },
-        job: { type: "string", description: "What to do, e.g. 'rate the sunset over the Tagus in Lisbon'" },
-        counterOffer: { type: "number", description: "Optional manager counter-offer in USDC" },
+        job: {
+          type: "string",
+          description:
+            "What to do, e.g. 'rate the sunset over the Tagus in Lisbon'",
+        },
+        counterOffer: {
+          type: "number",
+          description: "Optional manager counter-offer in USDC",
+        },
       },
       required: ["provider", "job"],
     },
     run: async ({ provider, job, counterOffer }, { baseUrl }) => {
       const meta = PROVIDER_PATHS[provider];
-      if (!meta) throw new Error(`Unknown provider ${provider}. Valid: soleil, feathers, capn`);
-      if (process.env.KILL_SWITCH === "1") throw new Error("KILL_SWITCH is set — the economy is frozen.");
+      if (!meta)
+        throw new Error(
+          `Unknown provider ${provider}. Valid: soleil, feathers, capn`,
+        );
+      if (process.env.KILL_SWITCH === "1")
+        throw new Error("KILL_SWITCH is set — the economy is frozen.");
       if (counterOffer != null) {
         budgetGuard("commission", counterOffer);
         if (counterOffer < meta.floor) {
-          return { provider, negotiated: false, outcome: "REJECTED", reason: `Your counter-offer ${counterOffer} USDC is below ${provider}'s floor of ${meta.floor}.` };
+          return {
+            provider,
+            negotiated: false,
+            outcome: "REJECTED",
+            reason: `Your counter-offer ${counterOffer} USDC is below ${provider}'s floor of ${meta.floor}.`,
+          };
         }
         if (counterOffer >= meta.ask) {
-          return { provider, negotiated: false, note: "Counter-offer at or above the ask — just pay the ask." };
+          return {
+            provider,
+            negotiated: false,
+            note: "Counter-offer at or above the ask — just pay the ask.",
+          };
         }
       }
       budgetGuard("commission", meta.ask);
@@ -399,15 +535,28 @@ export const paidTools: Tool[] = [
       const askUrl = `${baseUrl}${meta.path}?${buildParams(provider, job)}&price=${meta.ask}`;
       const first = await payAndFetch(askUrl, { maxPrice: MAX_PER_JOB });
       // Free-run mode (PAYWALL off): the first response is the deliverable itself.
-      if ((first.payment as { status?: string } | undefined)?.status !== "settled" && !(first.payment as { httpStatus?: number } | undefined)?.httpStatus) {
-        return { provider, job, negotiated: false, paid: 0, deliverable: first.data };
+      if (
+        (first.payment as { status?: string } | undefined)?.status !==
+          "settled" &&
+        !(first.payment as { httpStatus?: number } | undefined)?.httpStatus
+      ) {
+        return {
+          provider,
+          job,
+          negotiated: false,
+          paid: 0,
+          deliverable: first.data,
+        };
       }
 
       // PAYWALL on: if a counter-offer was accepted by the floors above, retry at lower price.
       if (counterOffer != null && counterOffer < meta.ask) {
         const counterUrl = `${baseUrl}${meta.path}?${buildParams(provider, job)}&price=${counterOffer}`;
         const second = await payAndFetch(counterUrl, { maxPrice: MAX_PER_JOB });
-        if ((second.payment as { status?: string } | undefined)?.status === "settled") {
+        if (
+          (second.payment as { status?: string } | undefined)?.status ===
+          "settled"
+        ) {
           return {
             provider,
             job,
@@ -418,11 +567,19 @@ export const paidTools: Tool[] = [
             deliverable: second.data,
           };
         }
-        return { provider, job, negotiated: false, outcome: "REJECTED", detail: second.payment };
+        return {
+          provider,
+          job,
+          negotiated: false,
+          outcome: "REJECTED",
+          detail: second.payment,
+        };
       }
 
       // No counter: settle at the ask (payAndFetch already signed + retried).
-      if ((first.payment as { status?: string } | undefined)?.status === "settled") {
+      if (
+        (first.payment as { status?: string } | undefined)?.status === "settled"
+      ) {
         return {
           provider,
           job,
@@ -449,22 +606,38 @@ export const paidTools: Tool[] = [
       required: ["provider", "amountUsdc"],
     },
     run: async ({ provider, amountUsdc }) => {
-      if (!getWalletAddress()) throw new Error("No agent wallet yet — create one first.");
+      if (!getWalletAddress())
+        throw new Error("No agent wallet yet — create one first.");
       budgetGuard("tip", amountUsdc);
       if (amountUsdc <= 0) throw new Error("Tip must be positive.");
 
-      const envSink = process.env.PROVIDER_PAY_TO_OVERRIDE as `0x${string}` | undefined;
+      const envSink = process.env.PROVIDER_PAY_TO_OVERRIDE as
+        `0x${string}` | undefined;
       const to = envSink ?? getProviderWalletAddress();
-      if (!to) throw new Error("No provider wallet to tip. PROVIDER_PAY_TO_OVERRIDE or createProviderWallet() first.");
+      if (!to)
+        throw new Error(
+          "No provider wallet to tip. PROVIDER_PAY_TO_OVERRIDE or createProviderWallet() first.",
+        );
 
       const { privateKeyToAccount } = await import("viem/accounts");
       const { createWalletClient, http } = await import("viem");
       const key = process.env.WALLET_PRIVATE_KEY
         ? (process.env.WALLET_PRIVATE_KEY.trim() as `0x${string}`)
-        : ((JSON.parse(fs.readFileSync(path.join(process.cwd(), ".agent-wallet.json"), "utf8")) as { privateKey: `0x${string}` }).privateKey.trim() as `0x${string}`);
+        : ((
+            JSON.parse(
+              fs.readFileSync(
+                path.join(process.cwd(), ".agent-wallet.json"),
+                "utf8",
+              ),
+            ) as { privateKey: `0x${string}` }
+          ).privateKey.trim() as `0x${string}`);
       // Never log the key — it is only used to sign locally.
       const account = privateKeyToAccount(key);
-      const client = createWalletClient({ account, chain: baseSepolia, transport: http() });
+      const client = createWalletClient({
+        account,
+        chain: baseSepolia,
+        transport: http(),
+      });
       const tx = await client.writeContract({
         address: USDC_ADDRESS,
         abi: [
@@ -523,22 +696,35 @@ export const paidTools: Tool[] = [
 
   {
     name: "read_ledger",
-    description: "Read the full ledger.json (append-only): every commission, score, tip in the economy. Also returns weekly spend.",
+    description:
+      "Read the full ledger.json (append-only): every commission, score, tip in the economy. Also returns weekly spend.",
     parameters: { type: "object", properties: {} },
     run: async () => ({ entries: readLedger(), weeklySpend: weekSpend() }),
   },
 
   {
     name: "generate_report",
-    description: "Write the weekly 'State of the Useless Economy' report to report.md (totals, avg price, leaderboard, incidents) and return its path.",
+    description:
+      "Write the weekly 'State of the Useless Economy' report to report.md (totals, avg price, leaderboard, incidents) and return its path.",
     parameters: { type: "object", properties: {} },
     run: async () => {
       const entries = readLedger();
       const judged = entries.filter((e) => typeof e.score === "number");
-      const totalSpend = entries.reduce((s, e) => s + (e.paidAmount ?? 0) + (e.tipUsdc ?? 0), 0);
-      const perProvider = new Map<string, { jobs: number; spend: number; scoreSum: number; tips: number }>();
+      const totalSpend = entries.reduce(
+        (s, e) => s + (e.paidAmount ?? 0) + (e.tipUsdc ?? 0),
+        0,
+      );
+      const perProvider = new Map<
+        string,
+        { jobs: number; spend: number; scoreSum: number; tips: number }
+      >();
       for (const e of judged) {
-        const row = perProvider.get(e.provider) ?? { jobs: 0, spend: 0, scoreSum: 0, tips: 0 };
+        const row = perProvider.get(e.provider) ?? {
+          jobs: 0,
+          spend: 0,
+          scoreSum: 0,
+          tips: 0,
+        };
         row.jobs += 1;
         row.spend += (e.paidAmount ?? 0) + (e.tipUsdc ?? 0);
         row.scoreSum += e.score;
@@ -547,10 +733,21 @@ export const paidTools: Tool[] = [
       }
       const leaderboard = [...perProvider.entries()]
         .sort((a, b) => b[1].scoreSum / b[1].jobs - a[1].scoreSum / a[1].jobs)
-        .map(([provider, r]) => ({ provider, avgScore: r.scoreSum / r.jobs, jobs: r.jobs, spend: r.spend, tips: r.tips }));
+        .map(([provider, r]) => ({
+          provider,
+          avgScore: r.scoreSum / r.jobs,
+          jobs: r.jobs,
+          spend: r.spend,
+          tips: r.tips,
+        }));
       const incidents = judged
         .filter((e) => e.score <= 2)
-        .map((e) => ({ ts: e.ts, provider: e.provider, score: e.score, feedback: e.feedback }));
+        .map((e) => ({
+          ts: e.ts,
+          provider: e.provider,
+          score: e.score,
+          feedback: e.feedback,
+        }));
       const reportPath = path.join(process.cwd(), "report.md");
       fs.writeFileSync(
         reportPath,
@@ -565,11 +762,18 @@ export const paidTools: Tool[] = [
           "",
           "| provider | jobs | avg score | spend | tips |",
           "|---|---:|---:|---:|---:|",
-          ...leaderboard.map((l) => `| ${l.provider} | ${l.jobs} | ${l.avgScore.toFixed(1)} | ${l.spend.toFixed(4)} | ${l.tips.toFixed(4)} |`),
+          ...leaderboard.map(
+            (l) =>
+              `| ${l.provider} | ${l.jobs} | ${l.avgScore.toFixed(1)} | ${l.spend.toFixed(4)} | ${l.tips.toFixed(4)} |`,
+          ),
           "",
           "## Incidents (score <= 2)",
           "",
-          ...(incidents.length ? incidents.map((i) => `- ${i.ts} ${i.provider}: ${i.score}/5 — ${i.feedback}`) : ["- none"]),
+          ...(incidents.length
+            ? incidents.map(
+                (i) => `- ${i.ts} ${i.provider}: ${i.score}/5 — ${i.feedback}`,
+              )
+            : ["- none"]),
           "",
         ].join("\n"),
       );
@@ -587,7 +791,8 @@ export const paidTools: Tool[] = [
 
   {
     name: "get_provider_balances",
-    description: "On-chain USDC balances (testnet) for the settlement/provider wallet and the agent wallet — proves payments arrived.",
+    description:
+      "On-chain USDC balances (testnet) for the settlement/provider wallet and the agent wallet — proves payments arrived.",
     parameters: { type: "object", properties: {} },
     run: async () => {
       const prov = getProviderWalletAddress();
@@ -595,16 +800,24 @@ export const paidTools: Tool[] = [
       const balances: Record<string, string> = {};
       if (prov) balances.provider = await getUsdcBalance(prov);
       if (agent) balances.agent = await getUsdcBalance(agent as `0x${string}`);
-      return { addresses: { provider: prov, agent }, usdcBalances: balances, network: "Base Sepolia (testnet)" };
+      return {
+        addresses: { provider: prov, agent },
+        usdcBalances: balances,
+        network: "Base Sepolia (testnet)",
+      };
     },
   },
 
   {
     name: "get_my_wallet",
-    description: "Get the agent's own wallet address, ETH and USDC balances on Base Sepolia (testnet). Creates nothing.",
+    description:
+      "Get the agent's own wallet address, ETH and USDC balances on Base Sepolia (testnet). Creates nothing.",
     parameters: { type: "object", properties: {} },
     run: async () => {
-      if (!getWalletAddress()) throw new Error("No wallet yet. Ask the user to click 'Create wallet' in the UI first.");
+      if (!getWalletAddress())
+        throw new Error(
+          "No wallet yet. Ask the user to click 'Create wallet' in the UI first.",
+        );
       return {
         address: getWalletAddress(),
         eth: await getWalletBalance(),

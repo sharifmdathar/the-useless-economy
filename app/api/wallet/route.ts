@@ -1,4 +1,8 @@
-import { createWallet, getWalletAddress, getWalletBalance } from "@/agent/wallet";
+import {
+  createWallet,
+  getWalletAddress,
+  getWalletBalance,
+} from "@/agent/wallet";
 
 // GET /api/wallet -> the agent's wallet address and balance (or null if none yet)
 export async function GET() {

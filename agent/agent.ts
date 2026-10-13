@@ -25,9 +25,17 @@ const SYSTEM_PROMPT =
   "For 'run the economy on X' or 'who wins on X' use run_gig_economy. Keep answers short and friendly.";
 
 export type ChatMessage = { role: "user" | "agent"; text: string };
-export type Step = { tool: string; args: unknown; result: unknown; error?: boolean };
+export type Step = {
+  tool: string;
+  args: unknown;
+  result: unknown;
+  error?: boolean;
+};
 
-export async function runAgent(history: ChatMessage[], ctx: { baseUrl: string }) {
+export async function runAgent(
+  history: ChatMessage[],
+  ctx: { baseUrl: string },
+) {
   const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
   const contents: Content[] = history.map((m) => ({
     role: m.role === "user" ? "user" : "model",
@@ -72,7 +80,13 @@ export async function runAgent(history: ChatMessage[], ctx: { baseUrl: string })
         error = true;
       }
       steps.push({ tool: call.name!, args: call.args, result, error });
-      results.push({ functionResponse: { id: call.id, name: call.name, response: { result } } });
+      results.push({
+        functionResponse: {
+          id: call.id,
+          name: call.name,
+          response: { result },
+        },
+      });
     }
 
     contents.push({ role: "user", parts: results });

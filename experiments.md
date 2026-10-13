@@ -8,8 +8,8 @@ in as runs complete; every number should be reproducible from ledger.json.
 Run `run_gig_economy` on one identical job per row and record scores.
 
 | date | job | soleil score | feathers score | capn score | winner | notes |
-|---|---|---|---|---|---|---|
-| | | | | | | |
+| ---- | --- | ------------ | -------------- | ---------- | ------ | ----- |
+|      |     |              |                |            |        |       |
 
 ## 2. Counter-offer acceptance rate (target: 50%)
 
@@ -19,8 +19,8 @@ should always be accepted in code; spread targets across ALL providers, Cap'n
 never accepts (floor == ask) by persona.
 
 | date | provider | counterOffer | outcome | notes |
-|---|---|---|---|---|
-| | | | | |
+| ---- | -------- | ------------ | ------- | ----- |
+|      |          |              |         |       |
 
 Target: **50% overall acceptance** achieved by mixing providers/job sizes; log
 any deviation as an incident in report.md.
@@ -31,8 +31,8 @@ A/B: for each provider, alternate tipped and untipped commissions and compare
 the judge score of the NEXT job from that provider.
 
 | date | provider | tipped previous job? | tip size | next-job score | delta vs provider avg |
-|---|---|---|---|---|---|
-| | | | | | |
+| ---- | -------- | -------------------- | -------- | -------------- | --------------------- |
+|      |          |                      |          |                |                       |
 
 (Score is produced by the independent judge, not the manager, so the A/B is not
 self-graded. If tip effect shows up, note it in DECISIONS.md too.)

@@ -20,8 +20,15 @@ export async function GET(req: Request) {
     value?: unknown;
     amount?: string;
   } | null;
-  if (!payment || payment.to !== PAY_TO || Number(payment.amount ?? payment.value ?? 0) < Number(PRICE)) {
-    return Response.json({ error: "Payment Required", price: PRICE, asset: ASSET, payTo: PAY_TO }, { status: 402 });
+  if (
+    !payment ||
+    payment.to !== PAY_TO ||
+    Number(payment.amount ?? payment.value ?? 0) < Number(PRICE)
+  ) {
+    return Response.json(
+      { error: "Payment Required", price: PRICE, asset: ASSET, payTo: PAY_TO },
+      { status: 402 },
+    );
   }
 
   // Fake weather — swap in a real API here if you like.

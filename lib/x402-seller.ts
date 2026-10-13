@@ -6,7 +6,12 @@
  *   - header present         -> verify + settle on-chain, return { payment, settledTx }
  *   - below persona floor    -> 402 refusal (the negotiation rule, in code)
  */
-import { verifyPayment, settlePaymentFromHeader, USDC_ADDRESS, type X402PaymentBody } from "@/agent/wallet";
+import {
+  verifyPayment,
+  settlePaymentFromHeader,
+  USDC_ADDRESS,
+  type X402PaymentBody,
+} from "@/agent/wallet";
 import { PROVIDERS, type ProviderSlug } from "./providers";
 
 export function providerBySlug(slug: string) {
@@ -17,9 +22,18 @@ export function providerBySlug(slug: string) {
 
 export type GuardResult =
   | { kind: "requirements"; response: Response }
-  | { kind: "settled"; payment: X402PaymentBody; settledTx: string; effectivePrice: number };
+  | {
+      kind: "settled";
+      payment: X402PaymentBody;
+      settledTx: string;
+      effectivePrice: number;
+    };
 
-export async function guardOrSettle(req: Request, slug: ProviderSlug, negotiatedPrice?: number): Promise<GuardResult> {
+export async function guardOrSettle(
+  req: Request,
+  slug: ProviderSlug,
+  negotiatedPrice?: number,
+): Promise<GuardResult> {
   const provider = providerBySlug(slug);
   const payTo = process.env.PROVIDER_PAY_TO_OVERRIDE
     ? (process.env.PROVIDER_PAY_TO_OVERRIDE as `0x${string}`)
@@ -49,7 +63,10 @@ export async function guardOrSettle(req: Request, slug: ProviderSlug, negotiated
   if (!payment) {
     return {
       kind: "requirements",
-      response: Response.json({ error: "Invalid or expired X-PAYMENT authorization" }, { status: 402 }),
+      response: Response.json(
+        { error: "Invalid or expired X-PAYMENT authorization" },
+        { status: 402 },
+      ),
     };
   }
 
@@ -58,7 +75,10 @@ export async function guardOrSettle(req: Request, slug: ProviderSlug, negotiated
   if (Number(payment.value) < floor * 10 ** 6) {
     return {
       kind: "requirements",
-      response: Response.json({ error: "Payment below persona floor", floor }, { status: 402 }),
+      response: Response.json(
+        { error: "Payment below persona floor", floor },
+        { status: 402 },
+      ),
     };
   }
 
@@ -71,8 +91,16 @@ export async function guardOrSettle(req: Request, slug: ProviderSlug, negotiated
     const reason = err instanceof Error ? err.message : String(err);
     return {
       kind: "requirements",
-      response: Response.json({ error: "Settlement failed", reason }, { status: 502 }),
+      response: Response.json(
+        { error: "Settlement failed", reason },
+        { status: 502 },
+      ),
     };
   }
-  return { kind: "settled", payment, settledTx: tx, effectivePrice: Number(payment.value) / 10 ** 6 };
+  return {
+    kind: "settled",
+    payment,
+    settledTx: tx,
+    effectivePrice: Number(payment.value) / 10 ** 6,
+  };
 }

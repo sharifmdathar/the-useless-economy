@@ -13,7 +13,9 @@ const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY ?? "" });
 
 export async function callGemini(persona: string, prompt: string) {
   if (!process.env.GEMINI_API_KEY) {
-    throw new Error("No GEMINI_API_KEY in .env — provider cannot think. Add a free key from aistudio.google.com/apikey and restart.");
+    throw new Error(
+      "No GEMINI_API_KEY in .env — provider cannot think. Add a free key from aistudio.google.com/apikey and restart.",
+    );
   }
   const res = await ai.models.generateContent({
     model: MODEL,

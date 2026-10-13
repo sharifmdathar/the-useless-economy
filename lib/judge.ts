@@ -50,7 +50,11 @@ ${deliverable}`;
     const parsed = JSON.parse(text.match(/\{[\s\S]*\}/)?.[0] ?? text);
     const score = Math.round(Number(parsed.score));
     if (score >= 1 && score <= 5) {
-      return { score, verdict: String(parsed.verdict ?? ""), notes: String(parsed.notes ?? "") };
+      return {
+        score,
+        verdict: String(parsed.verdict ?? ""),
+        notes: String(parsed.notes ?? ""),
+      };
     }
   } catch {
     // fall through to heuristic

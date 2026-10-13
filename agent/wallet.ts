@@ -32,7 +32,8 @@ const PROVIDER_WALLET_FILE = path.join(process.cwd(), ".provider-wallet.json");
 const chain = baseSepolia; // TESTNET ONLY — never swap for mainnet
 
 // Circle's testnet USDC on Base Sepolia.
-export const USDC_ADDRESS: Address = "0x036CbD53842c5426634e7929541eC2318f3dCF7e";
+export const USDC_ADDRESS: Address =
+  "0x036CbD53842c5426634e7929541eC2318f3dCF7e";
 export const USDC_DECIMALS = 6;
 
 // USDC ABI trimmed to the functions used here.
@@ -63,7 +64,12 @@ const USDC_ABI = [
   },
 ] as const;
 
-export type X402Requirement = { price: string; asset: Address; payTo: Address; resource: string };
+export type X402Requirement = {
+  price: string;
+  asset: Address;
+  payTo: Address;
+  resource: string;
+};
 
 export type X402PaymentBody = {
   from: Address;
@@ -74,7 +80,12 @@ export type X402PaymentBody = {
   nonce: Hex;
 };
 
-export const X402_DOMAIN = { name: "USD Coin", version: "2", chainId: chain.id, verifyingContract: USDC_ADDRESS } as const;
+export const X402_DOMAIN = {
+  name: "USD Coin",
+  version: "2",
+  chainId: chain.id,
+  verifyingContract: USDC_ADDRESS,
+} as const;
 export const X402_TYPES = {
   TransferWithAuthorization: [
     { name: "from", type: "address" },
@@ -94,7 +105,9 @@ function loadKey(file: string, envVar: string): Hex | null {
   const fromEnv = process.env[envVar];
   if (fromEnv && fromEnv.startsWith("0x")) return fromEnv.trim() as Hex;
   try {
-    const stored = (JSON.parse(fs.readFileSync(file, "utf8")) as { privateKey: Hex }).privateKey;
+    const stored = (
+      JSON.parse(fs.readFileSync(file, "utf8")) as { privateKey: Hex }
+    ).privateKey;
     return stored && stored.startsWith("0x") ? (stored.trim() as Hex) : null;
   } catch {
     return null;
@@ -109,7 +122,10 @@ function loadAccount() {
 
 function requireAccount() {
   const account = loadAccount();
-  if (!account) throw new Error("The agent has no wallet yet. Ask the user to click 'Create wallet' first.");
+  if (!account)
+    throw new Error(
+      "The agent has no wallet yet. Ask the user to click 'Create wallet' first.",
+    );
   return account;
 }
 
@@ -131,7 +147,10 @@ export function createWallet() {
 export function createProviderWallet() {
   if (loadProviderAccount()) return loadProviderAccount()!.address;
   const privateKey = generatePrivateKey();
-  fs.writeFileSync(PROVIDER_WALLET_FILE, JSON.stringify({ privateKey }, null, 2));
+  fs.writeFileSync(
+    PROVIDER_WALLET_FILE,
+    JSON.stringify({ privateKey }, null, 2),
+  );
   return privateKeyToAccount(privateKey).address;
 }
 
@@ -144,7 +163,9 @@ export function getProviderWalletAddress(): Address | null {
 }
 
 export async function getWalletBalance() {
-  const wei = await getPublicClient().getBalance({ address: requireAccount().address });
+  const wei = await getPublicClient().getBalance({
+    address: requireAccount().address,
+  });
   return `${formatEther(wei)} ETH`;
 }
 
@@ -161,7 +182,12 @@ export async function getUsdcBalance(address: Address): Promise<string> {
 
 // ─── buyer side ───
 
-function parseHeader(header: string): { payment: X402PaymentBody; signature: Hex; asset: Address; resource: string } {
+function parseHeader(header: string): {
+  payment: X402PaymentBody;
+  signature: Hex;
+  asset: Address;
+  resource: string;
+} {
   const parsed = JSON.parse(Buffer.from(header, "base64").toString()) as {
     scheme: string;
     payment: Omit<X402PaymentBody, "value"> & { value: string };
@@ -172,7 +198,10 @@ function parseHeader(header: string): { payment: X402PaymentBody; signature: Hex
   // The X-PAYMENT header carries value as a decimal string (JSON cannot hold
   // bigint); convert back so seller-side typed-data verification sees the same
   // message the buyer signed.
-  return { ...parsed, payment: { ...parsed.payment, value: BigInt(parsed.payment.value) } };
+  return {
+    ...parsed,
+    payment: { ...parsed.payment, value: BigInt(parsed.payment.value) },
+  };
 }
 
 /**
@@ -183,23 +212,31 @@ function parseHeader(header: string): { payment: X402PaymentBody; signature: Hex
 export async function payAndFetch(url: string, opts?: { maxPrice?: number }) {
   const first = await fetch(url);
   if (first.status !== 402) {
-    if (!first.ok) throw new Error(`Provider ${first.status}: ${(await first.text()).slice(0, 200)}`);
+    if (!first.ok)
+      throw new Error(
+        `Provider ${first.status}: ${(await first.text()).slice(0, 200)}`,
+      );
     return { data: await first.json() };
   }
 
   const req = (await first.json()) as X402Requirement;
   const price = Number(req.price);
-  if (Number.isNaN(price) || price <= 0) throw new Error("Provider 402 did not include a parseable positive price.");
+  if (Number.isNaN(price) || price <= 0)
+    throw new Error("Provider 402 did not include a parseable positive price.");
 
   // Hard cap stays buyer-side: never sign an authorization above the cap.
   if (opts?.maxPrice != null && price > opts.maxPrice) {
-    throw new Error(`Provider asks ${price} USDC, above the ${opts.maxPrice} cap. Refusing to pay.`);
+    throw new Error(
+      `Provider asks ${price} USDC, above the ${opts.maxPrice} cap. Refusing to pay.`,
+    );
   }
 
   const account = requireAccount();
   const validAfter = 0n;
   const validBefore = BigInt(Math.floor(Date.now() / 1000) + 3600); // ~1h window
-  const nonce = (crypto.randomUUID() + crypto.randomUUID()).replace(/-/g, "").slice(0, 32);
+  const nonce = (crypto.randomUUID() + crypto.randomUUID())
+    .replace(/-/g, "")
+    .slice(0, 32);
   const value = BigInt(Math.round(price * 10 ** USDC_DECIMALS));
 
   const message: X402PaymentBody = {
@@ -213,7 +250,11 @@ export async function payAndFetch(url: string, opts?: { maxPrice?: number }) {
   };
 
   // viem signs typed data with the account's key locally (never sends the key).
-  const signature = await createWalletClient({ account, chain, transport: http() }).signTypedData({
+  const signature = await createWalletClient({
+    account,
+    chain,
+    transport: http(),
+  }).signTypedData({
     domain: X402_DOMAIN,
     types: X402_TYPES,
     primaryType: "TransferWithAuthorization",
@@ -230,12 +271,20 @@ export async function payAndFetch(url: string, opts?: { maxPrice?: number }) {
   ).toString("base64");
 
   const paid = await fetch(url, { headers: { "X-PAYMENT": header } });
-  const body = (await paid.json().catch(() => ({}))) as { settledTx?: string; error?: string };
+  const body = (await paid.json().catch(() => ({}))) as {
+    settledTx?: string;
+    error?: string;
+  };
   return {
     data: body,
     payment:
       paid.status === 200
-        ? { status: "settled" as const, amount: `${price} USDC`, to: req.payTo, tx: body.settledTx }
+        ? {
+            status: "settled" as const,
+            amount: `${price} USDC`,
+            to: req.payTo,
+            tx: body.settledTx,
+          }
         : { status: "rejected" as const, httpStatus: paid.status, body },
   };
 }
@@ -250,7 +299,8 @@ export async function verifyPayment(header: string | null) {
   if (!header) return null;
   try {
     const { payment, signature } = parseHeader(header);
-    if (payment.validBefore <= BigInt(Math.floor(Date.now() / 1000))) return null; // expired
+    if (payment.validBefore <= BigInt(Math.floor(Date.now() / 1000)))
+      return null; // expired
     if (payment.to.toLowerCase() === payment.from.toLowerCase()) return null; // self-pay nonsense
 
     // viem's verify typed data: recovers the signer and compares to payment.from.
@@ -274,7 +324,9 @@ export async function verifyPayment(header: string | null) {
  * broadcast transferWithAuthorization with the buyer's signature components.
  * Returns the on-chain settlement tx hash.
  */
-export async function settlePaymentFromHeader(header: string): Promise<{ tx: Hex; payment: X402PaymentBody }> {
+export async function settlePaymentFromHeader(
+  header: string,
+): Promise<{ tx: Hex; payment: X402PaymentBody }> {
   const payment = await verifyPayment(header);
   if (!payment) throw new Error("Invalid or expired X-PAYMENT authorization.");
 
@@ -287,11 +339,25 @@ export async function settlePaymentFromHeader(header: string): Promise<{ tx: Hex
   const s = `0x${signature.slice(66, 130)}` as Hex;
   const v = Number.parseInt(signature.slice(130, 132), 16);
 
-  const tx = await createWalletClient({ account, chain, transport: http() }).writeContract({
+  const tx = await createWalletClient({
+    account,
+    chain,
+    transport: http(),
+  }).writeContract({
     address: USDC_ADDRESS,
     abi: USDC_ABI,
     functionName: "transferWithAuthorization",
-    args: [payment.from, payment.to, payment.value, payment.validAfter, payment.validBefore, payment.nonce, v, r, s],
+    args: [
+      payment.from,
+      payment.to,
+      payment.value,
+      payment.validAfter,
+      payment.validBefore,
+      payment.nonce,
+      v,
+      r,
+      s,
+    ],
   });
   return { tx, payment };
 }

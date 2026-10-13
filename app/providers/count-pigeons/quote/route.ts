@@ -1,7 +1,9 @@
 /** Feathers' quote desk: what a pigeon census costs. */
 import { PROVIDERS, type ProviderSlug } from "@/lib/providers";
 
-const FEATHERS = PROVIDERS.find((p) => p.slug === ("feathers" satisfies ProviderSlug))!;
+const FEATHERS = PROVIDERS.find(
+  (p) => p.slug === ("feathers" satisfies ProviderSlug),
+)!;
 
 export function GET() {
   return Response.json({

@@ -15,7 +15,8 @@ export async function GET(req: Request) {
   const url = new URL(req.url);
   const location = url.searchParams.get("location") ?? "some square";
   const request = url.searchParams.get("request") ?? "";
-  const negotiatedPrice = Number(url.searchParams.get("price") ?? "") || undefined;
+  const negotiatedPrice =
+    Number(url.searchParams.get("price") ?? "") || undefined;
 
   // x402: 402 requirements when PAYWALL=1 and no valid payment, settle otherwise.
   let settled: Awaited<ReturnType<typeof guardOrSettle>> | undefined;
@@ -26,10 +27,15 @@ export async function GET(req: Request) {
 
   const prompt = `Count the pigeons visible in ${location}. The client says: "${request}".`;
   const text = await callGemini(PERSONA, prompt);
-  const data = (extractJson(text) as Record<string, unknown>) ?? { provider: "feathers", raw: text };
+  const data = (extractJson(text) as Record<string, unknown>) ?? {
+    provider: "feathers",
+    raw: text,
+  };
   return Response.json({
     ...data,
     model: MODEL,
-    ...(settled && settled.kind === "settled" ? { settledTx: settled.settledTx, paidUsdc: settled.effectivePrice } : {}),
+    ...(settled && settled.kind === "settled"
+      ? { settledTx: settled.settledTx, paidUsdc: settled.effectivePrice }
+      : {}),
   });
 }

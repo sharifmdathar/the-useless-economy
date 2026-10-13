@@ -30,17 +30,17 @@ tips or blacklists them, keeps an append-only ledger, and publishes a weekly
 
 ## Files that matter
 
-| Path | Role |
-|---|---|
-| `agent/tools.ts` | Every tool: 3 persona providers, judge, ledger, run_gig_economy, commission_job (x402 + negotiation), tip_provider (on-chain), set_provider_status, read_ledger, generate_report, wallet tools. Hard caps + KILL_SWITCH live here. |
-| `agent/agent.ts` | The gemini loop (MAX_STEPS=10, Foreman persona). |
-| `agent/wallet.ts` | EIP-3009 x402 buyer + seller (sign/verify/settle, USDC Base Sepolia). |
-| `lib/x402-seller.ts` | Shared provider-route guard: 402 requirements / verify / settle. |
-| `lib/judge.ts` | Independent strict judge prompt + heuristic fallback. |
-| `lib/ledger.ts` | Append-only ledger module used by provider-side flows. |
-| `app/providers/*` | The three provider services (personas + x402 walls). |
-| `ledger.json` | Append-only market data: {ts, jobType, provider, quotedPrice, paidAmount, txHash?, qualityScore, verdict, tipUsdc} |
-| `.provider-status.json` | Blacklist state. |
+| Path                    | Role                                                                                                                                                                                                                               |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `agent/tools.ts`        | Every tool: 3 persona providers, judge, ledger, run_gig_economy, commission_job (x402 + negotiation), tip_provider (on-chain), set_provider_status, read_ledger, generate_report, wallet tools. Hard caps + KILL_SWITCH live here. |
+| `agent/agent.ts`        | The gemini loop (MAX_STEPS=10, Foreman persona).                                                                                                                                                                                   |
+| `agent/wallet.ts`       | EIP-3009 x402 buyer + seller (sign/verify/settle, USDC Base Sepolia).                                                                                                                                                              |
+| `lib/x402-seller.ts`    | Shared provider-route guard: 402 requirements / verify / settle.                                                                                                                                                                   |
+| `lib/judge.ts`          | Independent strict judge prompt + heuristic fallback.                                                                                                                                                                              |
+| `lib/ledger.ts`         | Append-only ledger module used by provider-side flows.                                                                                                                                                                             |
+| `app/providers/*`       | The three provider services (personas + x402 walls).                                                                                                                                                                               |
+| `ledger.json`           | Append-only market data: {ts, jobType, provider, quotedPrice, paidAmount, txHash?, qualityScore, verdict, tipUsdc}                                                                                                                 |
+| `.provider-status.json` | Blacklist state.                                                                                                                                                                                                                   |
 
 ## Payment protocol (real, not mock)
 

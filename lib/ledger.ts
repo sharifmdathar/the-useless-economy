@@ -54,12 +54,20 @@ export async function appendLedger(entry: LedgerEntry): Promise<LedgerEntry[]> {
 }
 
 /** Attach a tip (and optional tx hash) to the most recent paid row per provider. */
-export async function applyTipToLedger(provider: string, tipUsdc: number, txHash?: string): Promise<LedgerEntry | null> {
+export async function applyTipToLedger(
+  provider: string,
+  tipUsdc: number,
+  txHash?: string,
+): Promise<LedgerEntry | null> {
   return serialized(() => {
     const entries = readAll();
     for (let i = entries.length - 1; i >= 0; i--) {
       const row = entries[i];
-      if (row.provider === provider && row.paidAmount > 0 && row.qualityScore > 0) {
+      if (
+        row.provider === provider &&
+        row.paidAmount > 0 &&
+        row.qualityScore > 0
+      ) {
         row.tipUsdc += tipUsdc;
         if (txHash) row.txHash = txHash;
         writeAll(entries);

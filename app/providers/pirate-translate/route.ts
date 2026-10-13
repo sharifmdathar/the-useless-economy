@@ -15,7 +15,8 @@ other text:
 export async function GET(req: Request) {
   const url = new URL(req.url);
   const text = url.searchParams.get("text") ?? "";
-  const negotiatedPrice = Number(url.searchParams.get("price") ?? "") || undefined;
+  const negotiatedPrice =
+    Number(url.searchParams.get("price") ?? "") || undefined;
 
   // x402: 402 requirements when PAYWALL=1 and no valid payment, settle otherwise.
   let settled: Awaited<ReturnType<typeof guardOrSettle>> | undefined;
@@ -26,10 +27,15 @@ export async function GET(req: Request) {
 
   const prompt = `Translate the following text into pirate speech, keeping meaning intact: "${text}"`;
   const geminiText = await callGemini(PERSONA, prompt);
-  const data = (extractJson(geminiText) as Record<string, unknown>) ?? { provider: "capn", raw: geminiText };
+  const data = (extractJson(geminiText) as Record<string, unknown>) ?? {
+    provider: "capn",
+    raw: geminiText,
+  };
   return Response.json({
     ...data,
     model: MODEL,
-    ...(settled && settled.kind === "settled" ? { settledTx: settled.settledTx, paidUsdc: settled.effectivePrice } : {}),
+    ...(settled && settled.kind === "settled"
+      ? { settledTx: settled.settledTx, paidUsdc: settled.effectivePrice }
+      : {}),
   });
 }

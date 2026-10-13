@@ -17,12 +17,16 @@ export async function GET(req: Request) {
   const url = new URL(req.url);
   const location = url.searchParams.get("location") ?? "unspecified locale";
   const request = url.searchParams.get("request") ?? "";
-  const negotiatedPrice = Number(url.searchParams.get("price") ?? "") || undefined;
+  const negotiatedPrice =
+    Number(url.searchParams.get("price") ?? "") || undefined;
 
   // Sunrise hail marys get the boot even before payment checks.
   if (/sunrise|\bdawn\b/i.test(request)) {
     return Response.json(
-      { provider: "soleil", refusal: "Sunrises are for amateurs, cher. Soleil rates sunsets only." },
+      {
+        provider: "soleil",
+        refusal: "Sunrises are for amateurs, cher. Soleil rates sunsets only.",
+      },
       { status: 422 },
     );
   }
@@ -36,10 +40,15 @@ export async function GET(req: Request) {
 
   const prompt = `Rate the sunset right now in ${location}. The client says: "${request}".`;
   const text = await callGemini(PERSONA, prompt);
-  const data = (extractJson(text) as Record<string, unknown>) ?? { provider: "soleil", raw: text };
+  const data = (extractJson(text) as Record<string, unknown>) ?? {
+    provider: "soleil",
+    raw: text,
+  };
   return Response.json({
     ...data,
     model: MODEL,
-    ...(settled && settled.kind === "settled" ? { settledTx: settled.settledTx, paidUsdc: settled.effectivePrice } : {}),
+    ...(settled && settled.kind === "settled"
+      ? { settledTx: settled.settledTx, paidUsdc: settled.effectivePrice }
+      : {}),
   });
 }

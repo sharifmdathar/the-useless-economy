@@ -98,12 +98,12 @@ Save the file and refresh the page. Your new tool appears in the Tools panel. No
 
 Every tool has four parts.
 
-| Field | Purpose |
-| :--- | :--- |
-| `name` | A unique identifier in snake case, such as `get_weather`. |
+| Field         | Purpose                                                                                                            |
+| :------------ | :----------------------------------------------------------------------------------------------------------------- |
+| `name`        | A unique identifier in snake case, such as `get_weather`.                                                          |
 | `description` | Plain English explaining what the tool does. Gemini reads this to decide when to use it, so be clear and specific. |
-| `parameters` | A JSON Schema describing the inputs. Gemini fills in these values for you. |
-| `run` | The function that does the work. Whatever it returns is sent back to Gemini. |
+| `parameters`  | A JSON Schema describing the inputs. Gemini fills in these values for you.                                         |
+| `run`         | The function that does the work. Whatever it returns is sent back to Gemini.                                       |
 
 A few guidelines:
 
@@ -138,32 +138,32 @@ Payments in this template are cryptographically signed but are not submitted to 
 
 ## Project Structure
 
-| Path | Description |
-| :--- | :--- |
-| `agent/tools.ts` | The tools your agent can use. This is the file you will edit most. |
-| `agent/agent.ts` | The agent loop that communicates with Gemini. |
-| `agent/wallet.ts` | The agent wallet, payment signing, and payment verification. |
-| `app/page.tsx` | The page: setup steps, tools list, and chat. |
-| `app/api/agent/route.ts` | The server endpoint that runs the agent. |
-| `app/api/wallet/route.ts` | The server endpoint that creates and reads the agent wallet. |
-| `app/api/weather/route.ts` | The mock paid weather API. |
-| `components/ui/` | Interface components from [shadcn/ui](https://ui.shadcn.com). You do not need to edit these. |
-| `.env` | Your API key and optional settings. |
-| `.agent-wallet.json` | The agent wallet, created when you click Create wallet. Never share this file. |
+| Path                       | Description                                                                                  |
+| :------------------------- | :------------------------------------------------------------------------------------------- |
+| `agent/tools.ts`           | The tools your agent can use. This is the file you will edit most.                           |
+| `agent/agent.ts`           | The agent loop that communicates with Gemini.                                                |
+| `agent/wallet.ts`          | The agent wallet, payment signing, and payment verification.                                 |
+| `app/page.tsx`             | The page: setup steps, tools list, and chat.                                                 |
+| `app/api/agent/route.ts`   | The server endpoint that runs the agent.                                                     |
+| `app/api/wallet/route.ts`  | The server endpoint that creates and reads the agent wallet.                                 |
+| `app/api/weather/route.ts` | The mock paid weather API.                                                                   |
+| `components/ui/`           | Interface components from [shadcn/ui](https://ui.shadcn.com). You do not need to edit these. |
+| `.env`                     | Your API key and optional settings.                                                          |
+| `.agent-wallet.json`       | The agent wallet, created when you click Create wallet. Never share this file.               |
 
 ## Configuration
 
 All settings live in the `.env` file.
 
-| Variable | Required | Description |
-| :--- | :--- | :--- |
-| `GEMINI_API_KEY` | Yes | Your Gemini API key. |
-| `GEMINI_MODEL` | No | The Gemini model to use. Defaults to `gemini-flash-latest`. |
-| `WALLET_PRIVATE_KEY` | No | Use an existing wallet instead of the Create wallet button. A private key starting with `0x`. When set, it takes priority over `.agent-wallet.json`. |
-| `PAYWALL` | No | `1` = provider routes activate their real x402 walls (402 → sign → settle). Default off (free-economy mode). |
-| `KILL_SWITCH` | No | `1` = the Foreman freezes; commissions and tips refuse to pay. |
-| `PROVIDER_PRIVATE_KEY` | No | Settlement wallet key for the x402 seller side. Leave unset to generate `.provider-wallet.json` via the `create_provider_wallet` tool. |
-| `PROVIDER_PAY_TO_OVERRIDE` | No | Force all provider payTo/tip destinations to one address. |
+| Variable                   | Required | Description                                                                                                                                          |
+| :------------------------- | :------- | :--------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GEMINI_API_KEY`           | Yes      | Your Gemini API key.                                                                                                                                 |
+| `GEMINI_MODEL`             | No       | The Gemini model to use. Defaults to `gemini-flash-latest`.                                                                                          |
+| `WALLET_PRIVATE_KEY`       | No       | Use an existing wallet instead of the Create wallet button. A private key starting with `0x`. When set, it takes priority over `.agent-wallet.json`. |
+| `PAYWALL`                  | No       | `1` = provider routes activate their real x402 walls (402 → sign → settle). Default off (free-economy mode).                                         |
+| `KILL_SWITCH`              | No       | `1` = the Foreman freezes; commissions and tips refuse to pay.                                                                                       |
+| `PROVIDER_PRIVATE_KEY`     | No       | Settlement wallet key for the x402 seller side. Leave unset to generate `.provider-wallet.json` via the `create_provider_wallet` tool.               |
+| `PROVIDER_PAY_TO_OVERRIDE` | No       | Force all provider payTo/tip destinations to one address.                                                                                            |
 
 Restart `npm run dev` after changing any value in `.env`.
 
@@ -186,13 +186,13 @@ To use a wallet you already have, set `WALLET_PRIVATE_KEY` in `.env` instead.
 
 ## Troubleshooting
 
-| Problem | Solution |
-| :--- | :--- |
-| The page says to add `GEMINI_API_KEY` | Add your key to `.env` and restart `npm run dev`. |
-| The agent never uses my new tool | Make the `description` more specific about when the tool should be used, then restart the server. |
-| The weather tool fails with "no wallet yet" | Click **Create wallet** in the Setup panel, then ask again. |
-| Port 3000 is already in use | Run `npm run dev -- -p 3001` and open that port instead. |
-| A model error appears in the chat | Check that your API key is valid, or set a different model in `GEMINI_MODEL`. |
+| Problem                                     | Solution                                                                                          |
+| :------------------------------------------ | :------------------------------------------------------------------------------------------------ |
+| The page says to add `GEMINI_API_KEY`       | Add your key to `.env` and restart `npm run dev`.                                                 |
+| The agent never uses my new tool            | Make the `description` more specific about when the tool should be used, then restart the server. |
+| The weather tool fails with "no wallet yet" | Click **Create wallet** in the Setup panel, then ask again.                                       |
+| Port 3000 is already in use                 | Run `npm run dev -- -p 3001` and open that port instead.                                          |
+| A model error appears in the chat           | Check that your API key is valid, or set a different model in `GEMINI_MODEL`.                     |
 
 ## Tech Stack
 
