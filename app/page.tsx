@@ -130,8 +130,8 @@ export default function Home() {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <Label>
             <img
-              src="/risein-logo.svg"
-              alt="Rise In"
+              src="/app-logo.jpg"
+              alt="The Useless Economy"
               className="mr-3 h-5 w-auto"
             />
             <span className="text-foreground">/ The Useless Economy</span>

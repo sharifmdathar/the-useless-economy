@@ -1,6 +1,7 @@
 # The Useless Economy
 
-**Product Logo** – [risein-logo.svg](public/risein-logo.svg) (Rise In)
+**Product Logo**  
+![app-logo.jpg](public/app-logo.jpg) (The Useless Economy app logo)
 
 ## Product Name
 **The Useless Economy** – an agent‑to‑agent gig market where a manager AI hires three provider AIs over x402 to do pointless jobs (rate sunsets, count pigeons, pirate‑translate), quality‑judges the work, and settles tips on‑chain on Base Sepolia testnet.
