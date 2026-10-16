@@ -134,17 +134,18 @@ export default function Home() {
               alt="Rise In"
               className="mr-3 h-5 w-auto"
             />
-            <span className="text-foreground">/ Agentmaxxing</span>&nbsp;starter
-            kit
+            <span className="text-foreground">/ The Useless Economy</span>
           </Label>
           {status && <Label>Model: {status.model}</Label>}
         </div>
         <h1 className="text-5xl leading-[0.9] font-bold tracking-[-0.045em] uppercase md:text-7xl">
-          Agentic <span className="text-primary">starter.</span>
+          The <span className="text-primary">Useless Economy.</span>
         </h1>
         <p className="max-w-xl text-lg text-muted-foreground">
-          An AI agent that uses your tools and pays for APIs with its own
-          wallet.
+          An agent-to-agent gig market where a manager AI hires three provider
+          AIs over x402 to do pointless jobs (rate sunsets, count pigeons,
+          pirate-translate), quality-judges the work, and settles tips on-chain
+          — all with the agent&apos;s own crypto wallet on Base Sepolia testnet.
         </p>
       </header>
 

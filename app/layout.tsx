@@ -12,7 +12,7 @@ const jetBrainsMono = JetBrains_Mono({
   variable: "--font-jetbrains-mono",
 });
 
-export const metadata = { title: "Agentic Starter" };
+export const metadata = { title: "The Useless Economy" };
 
 export default function RootLayout({
   children,

@@ -23,6 +23,60 @@ do NOT average two jobs into one score. Reply with ONLY this JSON:
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY ?? "" });
 
+const GEMINI_RETRYABLE = new Set([
+  "UNAVAILABLE",
+  "RATE_LIMIT_EXCEEDED",
+  "SERVICE_UNSPECIFIED",
+  "DEADLINE_EXCEEDED",
+]);
+
+function isRetryableStatus(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+
+  // The @google/genai SDK throws an ApiError carrying the HTTP status
+  // directly on the error object (err.status), e.g. { name: "ApiError", status: 503 }.
+  if ("status" in err) {
+    const s = (err as { status?: unknown }).status;
+    if (s === 503 || s === 429) return true;
+    if (typeof s === "string" && GEMINI_RETRYABLE.has(s)) return true;
+  }
+
+  // Some surfaces serialize/wrap the same failure under err.error.
+  if ("error" in err) {
+    const e = (err as { error?: unknown }).error;
+    if (e && typeof e === "object") {
+      if ("status" in e && typeof e.status === "string") {
+        if (GEMINI_RETRYABLE.has(e.status as string)) return true;
+      }
+      if ("code" in e && typeof e.code === "number") {
+        if (e.code === 503 || e.code === 429) return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+async function geminiWithRetry(
+  fn: () => Promise<{ text?: string }>,
+): Promise<string> {
+  const maxAttempts = 4;
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const res = await fn();
+      return res.text ?? "";
+    } catch (err) {
+      lastErr = err;
+      if (!isRetryableStatus(err)) throw err;
+      if (attempt === maxAttempts) throw err;
+      const backoff = Math.min(2 ** attempt * 1000, 20_000);
+      await new Promise((r) => setTimeout(r, backoff));
+    }
+  }
+  throw lastErr;
+}
+
 /** Heuristic fallback when we can't call Gemini (no API key). */
 function heuristicScore(deliverable: string) {
   const trimmed = deliverable.trim();
@@ -40,12 +94,13 @@ export async function judgeDeliverable(jobType: string, deliverable: string) {
   const prompt = `Job type: ${jobType}
 Deliverable (may be JSON or plain text, judge both):
 ${deliverable}`;
-  const res = await ai.models.generateContent({
-    model: MODEL,
-    contents: [{ role: "user", parts: [{ text: prompt }] }],
-    config: { systemInstruction: JUDGE_SYSTEM },
-  });
-  const text = res.text ?? "";
+  const text = await geminiWithRetry(async () =>
+    ai.models.generateContent({
+      model: MODEL,
+      contents: [{ role: "user", parts: [{ text: prompt }] }],
+      config: { systemInstruction: JUDGE_SYSTEM },
+    }),
+  );
   try {
     const parsed = JSON.parse(text.match(/\{[\s\S]*\}/)?.[0] ?? text);
     const score = Math.round(Number(parsed.score));

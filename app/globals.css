@@ -38,27 +38,27 @@
 }
 
 :root {
-  /* Agentmaxxing palette */
-  --background: #0a0a0a;
-  --foreground: #f2f1ec;
-  --card: #111110;
-  --card-foreground: #f2f1ec;
-  --popover: #111110;
-  --popover-foreground: #f2f1ec;
-  --primary: #c8e850;
-  --primary-foreground: #0a0a0a;
-  --secondary: #2a2a28;
-  --secondary-foreground: #f2f1ec;
-  --muted: #1a1a19;
-  --muted-foreground: #9a9a93;
-  --accent: #2a2a28;
-  --accent-foreground: #f2f1ec;
-  --destructive: #ff6b5a;
-  --border: rgba(242, 241, 236, 0.13);
-  --input: rgba(242, 241, 236, 0.24);
-  --ring: #c8e850;
-  --blue: #2030d8;
-  --blue-soft: #8c96ff;
+  /* The Useless Economy palette — custom theme, not the starter-kit defaults */
+  --background: #07050a;
+  --foreground: #f3e8ff;
+  --card: #120c1a;
+  --card-foreground: #f3e8ff;
+  --popover: #120c1a;
+  --popover-foreground: #f3e8ff;
+  --primary: #a855f7;
+  --primary-foreground: #ffffff;
+  --secondary: #1f152b;
+  --secondary-foreground: #f3e8ff;
+  --muted: #1c1426;
+  --muted-foreground: #b28fc9;
+  --accent: #7c3aed;
+  --accent-foreground: #ffffff;
+  --destructive: #ef4444;
+  --border: rgba(243, 232, 255, 0.13);
+  --input: rgba(243, 232, 255, 0.24);
+  --ring: #a855f7;
+  --blue: #3b82f6;
+  --blue-soft: #818cf8;
   --radius: 0rem;
 }
 

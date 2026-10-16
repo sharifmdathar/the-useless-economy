@@ -1,10 +1,15 @@
 /**
- * THE FOREMAN'S TOOLS — Week 3: the market now has real money.
+ * THE FOREMAN'S TOOLS — Phase 3: the market now has real money.
  *
  * Providers are x402 sellers (EIP-3009 USDC on Base Sepolia, testnet ONLY).
- * commission_job pays via payAndFetch; tip_provider sends a plain USDC transfer
- * from the agent wallet; hard caps (0.05/job, 1/week) and KILL_SWITCH are
- * enforced HERE, in code, so the LLM cannot spend past them.
+ * commission_job pays via the existing payAndFetch helper (402 -> sign ->
+ * X-PAYMENT -> settle). tip_provider sends a plain on-chain USDC transfer.
+ * Hard caps (0.05/job, 1/week) and KILL_SWITCH are enforced HERE, in code.
+ *
+ * Providers ship as Next.js route handlers under app/providers/*, not a
+ * separate Express server. The Phase-3 spec asked for x402-express/x402-fetch;
+ * this build keeps the route-handler path that is already wired, and notes the
+ * alternative in README + DECISIONS.md.
  */
 import fs from "fs";
 import path from "path";
@@ -18,9 +23,13 @@ import {
   getProviderWalletAddress,
   payAndFetch,
   USDC_ADDRESS,
+  USDC_DECIMALS,
 } from "./wallet";
 import { createPublicClient, formatUnits } from "viem";
 import { baseSepolia } from "viem/chains";
+import { PROVIDERS } from "@/lib/providers";
+
+const CHAIN_ID = 84532; // Base Sepolia — TESTNET ONLY
 
 export type Tool = {
   name: string;
@@ -34,9 +43,17 @@ export type Tool = {
 export const MODEL = process.env.GEMINI_MODEL || "gemini-flash-latest";
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
-// ─── Week 3 constants (caps live here, not in prompts) ───
+// ─── Phase 3 constants (caps live here, not in prompts) ───
 const MAX_PER_JOB = 0.05; // USDC hard cap per job
 const WEEKLY_CAP = 1; // USDC hard cap per rolling 7 days
+
+function assertTestnet() {
+  if (baseSepolia.id !== CHAIN_ID) {
+    throw new Error(
+      `Chain ID mismatch: expected ${CHAIN_ID} (Base Sepolia), got ${baseSepolia.id}. No mainnet paths are wired.`,
+    );
+  }
+}
 
 /** Rolling 7-day spend from ledger.json (paid + tips). */
 function weekSpend(): number {
@@ -97,17 +114,73 @@ const PROVIDER_PATHS: Record<
   },
 };
 
+const GEMINI_RETRYABLE = new Set([
+  "UNAVAILABLE",
+  "RATE_LIMIT_EXCEEDED",
+  "SERVICE_UNSPECIFIED",
+  "DEADLINE_EXCEEDED",
+]);
+
+function isRetryableStatus(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+
+  // The @google/genai SDK throws an ApiError carrying the HTTP status
+  // directly on the error object (err.status), e.g. { name: "ApiError", status: 503 }.
+  if ("status" in err) {
+    const s = (err as { status?: unknown }).status;
+    if (s === 503 || s === 429) return true;
+    if (typeof s === "string" && GEMINI_RETRYABLE.has(s)) return true;
+  }
+
+  // Some surfaces serialize/wrap the same failure under err.error.
+  if ("error" in err) {
+    const e = (err as { error?: unknown }).error;
+    if (e && typeof e === "object") {
+      if ("status" in e && typeof e.status === "string") {
+        if (GEMINI_RETRYABLE.has(e.status as string)) return true;
+      }
+      if ("code" in e && typeof e.code === "number") {
+        if (e.code === 503 || e.code === 429) return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+async function geminiWithRetry(
+  fn: () => Promise<{ text?: string }>,
+): Promise<string> {
+  const maxAttempts = 4;
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const res = await fn();
+      return res.text ?? "";
+    } catch (err) {
+      lastErr = err;
+      if (!isRetryableStatus(err)) throw err;
+      if (attempt === maxAttempts) throw err;
+      const backoff = Math.min(2 ** attempt * 1000, 20_000);
+      await new Promise((r) => setTimeout(r, backoff));
+    }
+  }
+  throw lastErr;
+}
+
 /**
  * One Gemini call per provider persona (kept for the judge and for
- * non-HTTP fallback persona calls).
+ * non-HTTP fallback persona calls). Retries on transient Gemini 503s so a
+ * demand spike does not turn a fallback persona call into a hard error.
  */
 async function callProvider(persona: string, prompt: string): Promise<string> {
-  const res = await ai.models.generateContent({
-    model: MODEL,
-    contents: [{ role: "user", parts: [{ text: prompt }] }],
-    config: { systemInstruction: persona },
-  });
-  return res.text ?? "";
+  return geminiWithRetry(async () =>
+    ai.models.generateContent({
+      model: MODEL,
+      contents: [{ role: "user", parts: [{ text: prompt }] }],
+      config: { systemInstruction: persona },
+    }),
+  );
 }
 
 // ─── 1. THE THREE PROVIDERS ───
@@ -212,18 +285,24 @@ export type Judgement = { score: number; feedback: string };
 /**
  * The ledger: append-only, at repo root. Tip updates ride on the paid row.
  * Serialized on a module-level queue so concurrent requests can't clobber it.
+ *
+ * Phase 3 row schema: every paid commission records who was paid (providerWallet),
+ * what was quoted, what settled (paidAmount), the settlement tx (txHash), and any
+ * tip (tipUsdc + tipTxHash). `txHash` is the payment tx; `tipTxHash` is the tip.
  */
 export type LedgerEntry = {
   ts: string;
   job: string;
   provider: string;
+  providerWallet: string; // the payTo / tip sink address for this row
   deliverable: string;
   score: number; // 1-5 from the judge
   feedback: string;
   quotedPrice?: number; // provider's asking price
   paidAmount?: number; // what actually settled
-  txHash?: string; // x402 settlement tx or tip transfer tx
+  txHash?: string; // x402 settlement tx
   tipUsdc?: number; // gratuity on top
+  tipTxHash?: string; // on-chain tip transfer tx
 };
 
 const LEDGER_PATH = path.join(process.cwd(), "ledger.json");
@@ -255,7 +334,7 @@ export async function logToLedger(
 export async function applyTip(
   provider: string,
   tipUsdc: number,
-  txHash?: string,
+  tipTxHash?: string,
 ): Promise<LedgerEntry | null> {
   return serialized(() => {
     let entries: LedgerEntry[] = [];
@@ -268,7 +347,7 @@ export async function applyTip(
       const row = entries[i];
       if (row.provider === provider && (row.paidAmount ?? 0) > 0) {
         row.tipUsdc = (row.tipUsdc ?? 0) + tipUsdc;
-        if (txHash) row.txHash = txHash;
+        if (tipTxHash) row.tipTxHash = tipTxHash;
         fs.writeFileSync(LEDGER_PATH, JSON.stringify(entries, null, 2) + "\n");
         return row;
       }
@@ -291,12 +370,13 @@ async function judge(
   const prompt = `Provider: ${providerName}
 Deliverable to judge:
 ${deliverableText}`;
-  const res = await ai.models.generateContent({
-    model: MODEL,
-    contents: [{ role: "user", parts: [{ text: prompt }] }],
-    config: { systemInstruction: JUDGE_SYSTEM },
-  });
-  const text = res.text ?? "";
+  const text = await geminiWithRetry(async () =>
+    ai.models.generateContent({
+      model: MODEL,
+      contents: [{ role: "user", parts: [{ text: prompt }] }],
+      config: { systemInstruction: JUDGE_SYSTEM },
+    }),
+  );
   try {
     const parsed = JSON.parse(text.match(/\{[\s\S]*\}/)?.[0] ?? text);
     const score = Math.round(Number(parsed.score));
@@ -365,6 +445,7 @@ export const coreTools: Tool[] = [
       const ledger = await logToLedger({
         job,
         provider: provider_name,
+        providerWallet: getProviderPayTo(provider_name),
         deliverable: deliverable_text,
         ...judgement,
         quotedPrice,
@@ -399,6 +480,7 @@ export const coreTools: Tool[] = [
       const ledger = await logToLedger({
         job,
         provider,
+        providerWallet: getProviderPayTo(provider),
         deliverable,
         score: Math.round(score),
         feedback,
@@ -451,6 +533,7 @@ export const coreTools: Tool[] = [
         const ledger = await logToLedger({
           job,
           provider,
+          providerWallet: getProviderPayTo(provider),
           deliverable,
           ...judgements[provider],
         });
@@ -661,7 +744,7 @@ export const paidTools: Tool[] = [
         provider,
         tipped: amountUsdc,
         to,
-        txHash: tx,
+        tipTxHash: tx,
         ledgerRow: row,
         note: "On-chain USDC transfer submitted on Base Sepolia (testnet).",
       };
@@ -697,9 +780,16 @@ export const paidTools: Tool[] = [
   {
     name: "read_ledger",
     description:
-      "Read the full ledger.json (append-only): every commission, score, tip in the economy. Also returns weekly spend.",
+      "Read the full ledger.json (append-only): every commission, score, tip in the economy. Also returns weekly spend and total spent this week.",
     parameters: { type: "object", properties: {} },
-    run: async () => ({ entries: readLedger(), weeklySpend: weekSpend() }),
+    run: async () => ({
+      entries: readLedger(),
+      weeklySpend: weekSpend(),
+      totalSpend: readLedger().reduce(
+        (s, e) => s + (e.paidAmount ?? 0) + (e.tipUsdc ?? 0),
+        0,
+      ),
+    }),
   },
 
   {
@@ -828,6 +918,21 @@ export const paidTools: Tool[] = [
   },
 ];
 
+/** The on-chain sink for a provider's tips and x402 payTo (env override first). */
+function getProviderPayTo(provider: string): `0x${string}` {
+  const envSink = process.env.PROVIDER_PAY_TO_OVERRIDE as
+    `0x${string}` | undefined;
+  if (envSink) return envSink;
+  const prov = getProviderWalletAddress();
+  if (prov) return prov;
+  const meta = PROVIDER_PATHS[provider];
+  if (meta) {
+    const registry = PROVIDERS.find((p) => p.slug === provider);
+    if (registry) return registry.payTo;
+  }
+  throw new Error(`No payTo resolvable for provider ${provider}.`);
+}
+
 /** Query-string per provider job type. */
 function buildParams(provider: string, job: string): string {
   if (provider === "capn") return `text=${encodeURIComponent(job)}`;
@@ -836,3 +941,24 @@ function buildParams(provider: string, job: string): string {
 
 /** The full tool surface the agent sees: free persona tools + judge/ledger + paid tools. */
 export const tools: Tool[] = [...coreTools, ...paidTools];
+
+// ─── CAP-ENFORCEMENT TEST HOOKS (exposed for direct guardrail verification).
+// These are NOT part of the Gemini-visible tool surface; they exist so the
+// cap/kill-switch logic can be tested without needing Gemini to cooperate.
+export const CAP_CONSTANTS = { MAX_PER_JOB, WEEKLY_CAP, CHAIN_ID };
+
+export async function testBudgetGuardCommission(amount: number) {
+  return budgetGuard("commission", amount);
+}
+
+export async function testBudgetGuardTip(amount: number) {
+  return budgetGuard("tip", amount);
+}
+
+export async function testWeekSpend() {
+  return weekSpend();
+}
+
+export async function testKillSwitchFrozen() {
+  return process.env.KILL_SWITCH === "1";
+}
