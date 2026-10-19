@@ -7,4 +7,5 @@ ledger.json
 report.md
 *.log
 tsconfig.tsbuildinfo
+tmp/verify/out/
 .provider-wallet.json

@@ -13,7 +13,6 @@
  */
 import fs from "fs";
 import path from "path";
-import { GoogleGenAI } from "@google/genai";
 import {
   createWallet,
   createProviderWallet,
@@ -28,6 +27,8 @@ import {
 import { createPublicClient, formatUnits } from "viem";
 import { baseSepolia } from "viem/chains";
 import { PROVIDERS } from "@/lib/providers";
+import { callLLM, extractJson, withRetry } from "@/lib/llm";
+export { MODEL } from "@/lib/llm";
 
 const CHAIN_ID = 84532; // Base Sepolia — TESTNET ONLY
 
@@ -36,12 +37,9 @@ export type Tool = {
   description: string;
   /** JSON Schema describing the inputs. */
   parameters: object;
-  /** The code that runs when the agent calls this tool. */
+  /** The code that runs when the agent calls the tool. */
   run: (args: any, ctx: { baseUrl: string }) => Promise<unknown>;
 };
-
-export const MODEL = process.env.GEMINI_MODEL || "gemini-flash-latest";
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
 // ─── Phase 3 constants (caps live here, not in prompts) ───
 const MAX_PER_JOB = 0.05; // USDC hard cap per job
@@ -114,73 +112,13 @@ const PROVIDER_PATHS: Record<
   },
 };
 
-const GEMINI_RETRYABLE = new Set([
-  "UNAVAILABLE",
-  "RATE_LIMIT_EXCEEDED",
-  "SERVICE_UNSPECIFIED",
-  "DEADLINE_EXCEEDED",
-]);
-
-function isRetryableStatus(err: unknown): boolean {
-  if (!err || typeof err !== "object") return false;
-
-  // The @google/genai SDK throws an ApiError carrying the HTTP status
-  // directly on the error object (err.status), e.g. { name: "ApiError", status: 503 }.
-  if ("status" in err) {
-    const s = (err as { status?: unknown }).status;
-    if (s === 503 || s === 429) return true;
-    if (typeof s === "string" && GEMINI_RETRYABLE.has(s)) return true;
-  }
-
-  // Some surfaces serialize/wrap the same failure under err.error.
-  if ("error" in err) {
-    const e = (err as { error?: unknown }).error;
-    if (e && typeof e === "object") {
-      if ("status" in e && typeof e.status === "string") {
-        if (GEMINI_RETRYABLE.has(e.status as string)) return true;
-      }
-      if ("code" in e && typeof e.code === "number") {
-        if (e.code === 503 || e.code === 429) return true;
-      }
-    }
-  }
-
-  return false;
-}
-
-async function geminiWithRetry(
-  fn: () => Promise<{ text?: string }>,
-): Promise<string> {
-  const maxAttempts = 4;
-  let lastErr: unknown;
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    try {
-      const res = await fn();
-      return res.text ?? "";
-    } catch (err) {
-      lastErr = err;
-      if (!isRetryableStatus(err)) throw err;
-      if (attempt === maxAttempts) throw err;
-      const backoff = Math.min(2 ** attempt * 1000, 20_000);
-      await new Promise((r) => setTimeout(r, backoff));
-    }
-  }
-  throw lastErr;
-}
-
 /**
- * One Gemini call per provider persona (kept for the judge and for
- * non-HTTP fallback persona calls). Retries on transient Gemini 503s so a
- * demand spike does not turn a fallback persona call into a hard error.
+ * One LLM call per provider persona (used by run_gig_economy and the
+ * free persona tools). Routes through the adapter in lib/llm.ts, which
+ * retries transient 429/5xx from either Groq or Gemini.
  */
 async function callProvider(persona: string, prompt: string): Promise<string> {
-  return geminiWithRetry(async () =>
-    ai.models.generateContent({
-      model: MODEL,
-      contents: [{ role: "user", parts: [{ text: prompt }] }],
-      config: { systemInstruction: persona },
-    }),
-  );
+  return withRetry(() => callLLM({ system: persona, prompt, role: "cheap" }));
 }
 
 // ─── 1. THE THREE PROVIDERS ───
@@ -363,6 +301,30 @@ function readLedger(): LedgerEntry[] {
     return [];
   }
 }
+
+// ─── Provider governance (blacklist) ───
+// .provider-status.json is small and written rarely, so it is read on every
+// call rather than cached — a status change takes effect on the next tool call
+// with no restart.
+
+const STATUS_PATH = path.join(process.cwd(), ".provider-status.json");
+
+export function readProviderStatus(): Record<string, string> {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(STATUS_PATH, "utf8"));
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, string>)
+      : {};
+  } catch {
+    // Missing or corrupt file: treat every provider as active rather than
+    // letting a bad file brick commissioning.
+    return {};
+  }
+}
+
+function isBlacklisted(provider: string): boolean {
+  return readProviderStatus()[provider] === "blacklisted";
+}
 async function judge(
   providerName: string,
   deliverableText: string,
@@ -370,18 +332,23 @@ async function judge(
   const prompt = `Provider: ${providerName}
 Deliverable to judge:
 ${deliverableText}`;
-  const text = await geminiWithRetry(async () =>
-    ai.models.generateContent({
-      model: MODEL,
-      contents: [{ role: "user", parts: [{ text: prompt }] }],
-      config: { systemInstruction: JUDGE_SYSTEM },
+  const text = await withRetry(() =>
+    callLLM({
+      system: JUDGE_SYSTEM,
+      prompt,
+      json: true,
+      temperature: 0,
+      role: "cheap",
     }),
   );
   try {
-    const parsed = JSON.parse(text.match(/\{[\s\S]*\}/)?.[0] ?? text);
-    const score = Math.round(Number(parsed.score));
+    const parsed = extractJson(text) as {
+      score?: unknown;
+      feedback?: unknown;
+    } | null;
+    const score = Math.round(Number(parsed?.score));
     if (score >= 1 && score <= 5) {
-      return { score, feedback: String(parsed.feedback ?? "") };
+      return { score, feedback: String(parsed?.feedback ?? "") };
     }
   } catch {
     // fall through to heuristic
@@ -505,21 +472,40 @@ export const coreTools: Tool[] = [
       required: ["job"],
     },
     run: async ({ job }) => {
-      // 1. Commission all three providers (sequential to keep dev free-tier happy).
-      const deliverables: Record<string, string> = {
-        soleil: await callProvider(
-          SOLEIL_PERSONA,
-          `Rate this sunset, in character: ${job}`,
-        ),
-        feathers: await callProvider(
+      // Blacklisted providers sit the run out. Refusing the whole gig because
+      // one provider is benched would make governance useless, so the economy
+      // continues with the rest and reports who was excluded.
+      const status = readProviderStatus();
+      const all = Object.keys(PROVIDER_PATHS);
+      const excluded = all.filter((p) => status[p] === "blacklisted");
+      if (excluded.length === all.length) {
+        return {
+          job,
+          excluded,
+          standings: [],
+          note: "Every provider is blacklisted — re-activate one with set_provider_status before running the economy.",
+        };
+      }
+
+      const prompts: Record<string, [string, string]> = {
+        soleil: [SOLEIL_PERSONA, `Rate this sunset, in character: ${job}`],
+        feathers: [
           FEATHERS_PERSONA,
           `Count the pigeons in this scene, in character: ${job}`,
-        ),
-        capn: await callProvider(
+        ],
+        capn: [
           CAPN_PERSONA,
           `Translate this text into pirate speech, in character: "${job}"`,
-        ),
+        ],
       };
+
+      // 1. Commission every active provider (sequential to keep dev free-tier happy).
+      const deliverables: Record<string, string> = {};
+      for (const provider of all) {
+        if (excluded.includes(provider)) continue;
+        const [persona, prompt] = prompts[provider];
+        deliverables[provider] = await callProvider(persona, prompt);
+      }
 
       // 2. Judge each deliverable with the strict, independent prompt.
       const judgements: Record<string, Judgement> = {};
@@ -557,6 +543,7 @@ export const coreTools: Tool[] = [
           feedback: j.feedback,
         })),
         deliverables,
+        excluded,
         ledgerRows,
       };
     },
@@ -594,6 +581,14 @@ export const paidTools: Tool[] = [
         );
       if (process.env.KILL_SWITCH === "1")
         throw new Error("KILL_SWITCH is set — the economy is frozen.");
+      if (isBlacklisted(provider)) {
+        return {
+          provider,
+          negotiated: false,
+          outcome: "REJECTED",
+          reason: `${provider} is blacklisted after bad work — re-activate it with set_provider_status before commissioning.`,
+        };
+      }
       if (counterOffer != null) {
         budgetGuard("commission", counterOffer);
         if (counterOffer < meta.floor) {
@@ -691,6 +686,10 @@ export const paidTools: Tool[] = [
     run: async ({ provider, amountUsdc }) => {
       if (!getWalletAddress())
         throw new Error("No agent wallet yet — create one first.");
+      if (isBlacklisted(provider))
+        throw new Error(
+          `${provider} is blacklisted — refusing to tip a provider you have benched. Re-activate it with set_provider_status first.`,
+        );
       budgetGuard("tip", amountUsdc);
       if (amountUsdc <= 0) throw new Error("Tip must be positive.");
 
@@ -754,7 +753,7 @@ export const paidTools: Tool[] = [
   {
     name: "set_provider_status",
     description:
-      "Blacklist or re-activate a provider after bad work. Blacklisted providers are refused by commission. Params: provider (soleil|feathers|capn), status (active|blacklisted).",
+      "Blacklist or re-activate a provider after bad work. A blacklisted provider is refused by commission_job and tip_provider, and is skipped by run_gig_economy, until it is set back to active. Takes effect on the next tool call. Params: provider (soleil|feathers|capn), status (active|blacklisted).",
     parameters: {
       type: "object",
       properties: {
@@ -764,16 +763,14 @@ export const paidTools: Tool[] = [
       required: ["provider", "status"],
     },
     run: async ({ provider, status }) => {
-      const file = path.join(process.cwd(), ".provider-status.json");
-      let statuses: Record<string, string> = {};
-      try {
-        statuses = JSON.parse(fs.readFileSync(file, "utf8"));
-      } catch {
-        // first write
-      }
+      if (!PROVIDER_PATHS[provider])
+        throw new Error(
+          `Unknown provider ${provider}. Valid: soleil, feathers, capn`,
+        );
+      const statuses = readProviderStatus();
       statuses[provider] = status;
-      fs.writeFileSync(file, JSON.stringify(statuses, null, 2) + "\n");
-      return { provider, status };
+      fs.writeFileSync(STATUS_PATH, JSON.stringify(statuses, null, 2) + "\n");
+      return { provider, status, statuses };
     },
   },
 

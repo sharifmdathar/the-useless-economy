@@ -72,5 +72,41 @@
 - **2026-10-13 — Settlement wallet zero-gas limitation:** the full on-chain
   settlement (txHash in ledger, provider balance rises) requires the settlement
   wallet to hold Base Sepolia ETH for gas and the agent wallet to hold testnet
-  USDC; both are faucet steps only the user can perform. Code path is verified
-  up to the contract call and the revert was handled cleanly (502 with reason).
+  USDC; both are faucet steps only the user can perform.  Code path is verified up to the contract call and the revert was handled cleanly
+  (502 with reason).
+- **2026-10-16 — One LLM adapter behind `LLM_PROVIDER`:** persona/judge calls
+  previously hit Gemini directly (`lib/provider-gemini.ts` + an inline
+  `GoogleGenAI` in `agent/tools.ts`). Everything now funnels through `callLLM`
+  in `lib/llm.ts`, so the provider is an env choice: `LLM_PROVIDER=gemini` or
+  `groq` (OpenAI-compatible `/openai/v1`). A missing key for the selected
+  provider falls through to the other one (STRICT_PROVIDER=1 makes it a hard
+  error), and on Groq the persona/judge traffic goes to `GROQ_CHEAP_MODEL` —
+  each Groq model has its own free-tier quota, so the cheap model doubles as
+  the 429 fallback instead of retrying into the same wall. The agent loop keeps
+  ONE history representation (the OpenAI `tool_calls` / `role:"tool"` shape)
+  and translates to Gemini `Content` parts on the Gemini branch.
+  `lib/provider-gemini.ts` stays as a shim re-exporting the adapter so the
+  provider routes needed no edits.
+- **2026-10-17 — Gemini 3+ tool-loop replays, two separate 400s:** (a) Gemini
+  returns an opaque `thoughtSignature` on the functionCall PART and rejects a
+  replay without it; the SDK's `response.functionCalls` getter strips it, so
+  the loop now reads `candidates[0].content.parts` and carries the signature
+  alongside each call. (b) `functionResponse.response` must be a protobuf
+  Struct, so the persona tools' bare-string results are wrapped as
+  `{output: ...}`. Verified live: single-hop `run_gig_economy`, string-returning
+  `rate_sunset`, two sequential tool calls in one turn, and the Groq branch
+  (real tool call, zero errored steps).
+- **2026-10-17 — Deleted `lib/judge.ts`:** dead code — nothing imports it and
+  the live judge has been `JUDGE_SYSTEM` + `judge()` in `agent/tools.ts` since
+  the Week-2 rescope. `lib/ledger.ts` and `lib/manager-prompt.ts` are equally
+  unreferenced and were left in place pending confirmation that nothing
+  external depends on them.
+- **2026-10-17 — Data-loss incident (recovery note):** an accidental
+  `git reset --hard` discarded the uncommitted Oct-16 work plus untracked files
+  (`lib/llm.ts`, `tmp/verify/*`). Almost everything was restored byte-exactly
+  from the original TypeScript embedded in the `.next` source maps
+  (`sourcesContent`); the working tree now matches the pre-reset state. NOT
+  recovered: the `README.md` edits made after commit `263f64d`, the
+  `demo-video-guide-w2.md` draft, and the `lib/judge.ts` edits (moot — file
+  deleted). Commit early; `.next` was the only reason this came back.
+
