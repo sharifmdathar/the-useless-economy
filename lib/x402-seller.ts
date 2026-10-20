@@ -9,6 +9,7 @@
 import {
   verifyPayment,
   settlePaymentFromHeader,
+  getProviderWalletAddress,
   USDC_ADDRESS,
   type X402PaymentBody,
 } from "@/agent/wallet";
@@ -18,6 +19,22 @@ export function providerBySlug(slug: string) {
   const found = PROVIDERS.find((p) => p.slug === slug);
   if (!found) throw new Error(`Unknown provider ${slug}`);
   return found;
+}
+
+/**
+ * Where a provider's USDC actually lands.
+ *
+ * Order: explicit env override -> the funded provider wallet -> the registry
+ * address. The registry addresses are PLACEHOLDERS (0x...01/02/03) that
+ * nobody controls, so paying them burns the money with no recipient able to
+ * ever spend it. The funded wallet wins whenever it exists.
+ */
+export function resolvePayTo(slug: ProviderSlug): `0x${string}` {
+  const override = process.env.PROVIDER_PAY_TO_OVERRIDE;
+  if (override && override.startsWith("0x")) return override as `0x${string}`;
+  const funded = getProviderWalletAddress();
+  if (funded) return funded;
+  return providerBySlug(slug).payTo;
 }
 
 export type GuardResult =
@@ -35,9 +52,7 @@ export async function guardOrSettle(
   negotiatedPrice?: number,
 ): Promise<GuardResult> {
   const provider = providerBySlug(slug);
-  const payTo = process.env.PROVIDER_PAY_TO_OVERRIDE
-    ? (process.env.PROVIDER_PAY_TO_OVERRIDE as `0x${string}`)
-    : provider.payTo;
+  const payTo = resolvePayTo(slug);
 
   const header = req.headers.get("X-PAYMENT");
   if (!header) {

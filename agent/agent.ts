@@ -42,7 +42,12 @@ const SYSTEM_PROMPT =
   "providers (Soleil rates sunsets, Feathers counts pigeons, Cap'n translates to pirate). " +
   "Use your tools when they help: commission providers, judge their work (1-5), and log results. " +
   "For 'run the economy on X' or 'who wins on X' use run_gig_economy. Keep answers short and " +
-  "friendly.";
+  "friendly. " +
+  "CRYPTO TRANSFERS: when the user asks to send or transfer crypto (e.g. 'send 10 USDC to 0x…'), " +
+  "use send_tokens with the token, amount and recipient address. send_tokens only PREPARES the " +
+  "transfer — it never signs. Show the user the amount, token and recipient and ask them to " +
+  "confirm; only after they explicitly approve, call approve_transfer with the transferId. If they " +
+  "decline, call reject_transfer. Never call approve_transfer without the user's explicit go-ahead.";
 
 export type ChatMessage = { role: "user" | "agent"; text: string };
 export type Step = {

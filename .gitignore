@@ -1,8 +1,12 @@
+tmp/
+check_balances.mjs
 node_modules/
 .next/
 .env
 .agent-wallet.json
 ledger.json
+settlements.json
+.transfers.json
 .provider-status.json
 report.md
 *.log

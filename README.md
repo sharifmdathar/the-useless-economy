@@ -9,7 +9,9 @@
 ## Project Description
 An AI agent platform that connects a manager “Foreman” to three specialist providers (Soleil, Feathers, Cap’n) via x402 payments. The manager assigns a job, the providers compete on price, the manager picks a winner, the judge scores the deliverable, and tips are paid on‑chain. All transactions happen on the Base Sepolia **testnet**; the agent owns its own wallet for gas and tips.
 
-The Foreman is a tool‑calling loop (`agent/agent.ts`, max 10 steps): it sends the conversation plus 14 tool schemas to the model, runs whatever tools come back, feeds the results into the next turn, and stops when the model answers in text. The loop speaks the OpenAI wire format (`tool_calls` / `role: "tool"`) because Groq is OpenAI‑compatible, and translates to Gemini’s `Content` parts on the Gemini path — so the same tool schemas drive either provider unchanged.
+**Week 2 — natural-language transfers.** The Foreman can now also be *told* to move money. Ask it “send 1 USDC to 0x…” and the agent resolves the token, the amount, and the recipient, validates all three in code, and raises a **pending transfer intent**. Nothing is signed at that point. A review card appears in the chat; only after an explicit approval does the agent sign and broadcast, and the transaction hash is written back. Rejecting the card cancels the intent permanently.
+
+The Foreman is a tool‑calling loop (`agent/agent.ts`, max 10 steps): it sends the conversation plus the tool schemas to the model, runs whatever tools come back, feeds the results into the next turn, and stops when the model answers in text. The loop speaks the OpenAI wire format (`tool_calls` / `role: "tool"`) because Groq is OpenAI‑compatible, and translates to Gemini’s `Content` parts on the Gemini path — so the same tool schemas drive either provider unchanged.
 
 ## Tech Stack (versions)
 
@@ -20,7 +22,9 @@ The Foreman is a tool‑calling loop (`agent/agent.ts`, max 10 steps): it sends 
 | State Management | React hooks (`useState`/`useEffect`) | — |
 | AI Engine | Provider adapter: Gemini (`@google/genai`) + Groq (OpenAI‑compatible HTTP) | ^2.24.0 / `fetch` |
 | Wallet / x402 | viem (EIP‑3009 `transferWithAuthorization`) | ^2.56.9 |
-| Database | Local append‑only JSON (`ledger.json`, `report.md`, `.provider-status.json`) | — |
+| Gas Sponsorship | x402 facilitator (`https://x402.org/facilitator`), network `eip155:84532` | HTTP v2 |
+| Browser Wallet | EIP‑1193 injected provider (`window.ethereum`) — MetaMask / Rabby / Brave | — |
+| Database | Local append‑only JSON (`ledger.json`, `settlements.json`, `.transfers.json`, `report.md`, `.provider-status.json`) | — |
 | Tooling | TypeScript `tsc --noEmit`; no test framework is installed | ^5.9.3 |
 | Runtime | Node.js | >=20 |
 
@@ -51,34 +55,97 @@ Behaviour details that matter when configuring keys:
 - **Code‑Enforced Caps** – `0.05` USDC per job, `1` USDC per rolling 7 days, `KILL_SWITCH=1` freezes commission and tips. The limits live in `agent/tools.ts`, not in prompts.
 - **Weekly Report** – “State of the Useless Economy” summarises scores, leaderboard, spend, and incidents into `report.md`.
 - **Customizable UI** – dark theme, product‑specific branding, and easy layout tweaks.
-- **Extensible Tool Surface** – 14 tools, all driven by plain JSON Schema:
 
-  | Group | Tools |
-  |---|---|
-  | Persona (free) | `rate_sunset`, `count_pigeons`, `pirate_translate` |
-  | Judge / ledger | `judge_deliverable`, `log_to_ledger`, `read_ledger`, `generate_report` |
-  | Workflow | `run_gig_economy` (all three providers + 3 judgements + ranking in one call) |
-  | Money (on‑chain) | `commission_job` (x402 + negotiation), `tip_provider` |
-  | Governance | `set_provider_status` (blacklist/re‑activate) |
-  | Wallet | `create_provider_wallet`, `get_provider_balances`, `get_my_wallet` |
+### Week 2: Natural-language crypto transfers
+
+The headline Week 2 feature. The agent can be asked in plain English to move money, and it does so under a strict two‑phase, approve‑before‑sign flow.
+
+**The flow**
+
+1. **Parse** – the LLM extracts the token, amount, and recipient from the prompt.
+2. **Validate (in code, not in the prompt)** – `agent/tokens.ts` + `agent/transfers.ts` check the token against the allowlist, the chain ID, the recipient address (EIP‑55 checksum when mixed‑case), the amount's decimal precision, the per‑transfer cap, and the rolling daily cap. A prompt cannot raise a cap or talk the code into an unsupported asset.
+3. **Create a pending intent** – `send_tokens` writes a `pending` record to `.transfers.json`. **Nothing is signed and nothing is broadcast.**
+4. **Review card** – the UI renders the token, amount, recipient, caps, and source wallet (`components/transfer-card.tsx`).
+5. **Approve or reject** – explicit user action. Approve executes; reject cancels the intent permanently.
+6. **Settle** – only now is a signature created and the transaction broadcast. The transaction hash is returned and shown.
+
+**Two funding paths, one review UI**
+
+| Path | Who signs | Gas |
+|---|---|---|
+| **Agent wallet** (server‑side) | The agent's own key, off‑chain EIP‑3009 `TransferWithAuthorization` | Sponsored by the x402 facilitator — the agent wallet needs **zero ETH** |
+| **User wallet** (browser) | The injected extension (MetaMask / Rabby / Brave) signs in the browser | Paid by the user's own wallet |
+
+The browser path never sees a private key: `lib/browser-wallet.ts` talks to `window.ethereum` over EIP‑1193, the extension signs, and only the resulting transaction hash is sent back to the server.
+
+**Gasless settlement (x402 facilitator)**
+
+USDC transfers, provider settlement, and tips all go through the x402 facilitator at `https://x402.org/facilitator` (network `eip155:84532`), which relays the transaction and pays the gas. That is what makes a zero‑ETH agent wallet able to pay real USDC on Base Sepolia. Native ETH transfers are still sent directly and do need testnet ETH on the agent wallet.
+
+**Code‑enforced transfer limits**
+
+| Limit | Default | Env override |
+|---|---|---|
+| Per transfer | `100` USDC | `MAX_TRANSFER_USDC` |
+| Rolling 24h (all transfers) | `500` USDC | `MAX_DAILY_TRANSFER_USDC` |
+| Per job (agent spend) | `0.05` USDC | hardcoded (`MAX_PER_JOB`) |
+| Per 7 days (agent spend) | `1` USDC | hardcoded (`WEEKLY_CAP`) |
+| Kill switch | off | `KILL_SWITCH=1` freezes commissioning, tipping, and transfers |
+
+**Supported assets (Base Sepolia only)**
+
+| Symbol | Contract / type | Aliases accepted |
+|---|---|---|
+| `USDC` | `0x036CbD53842c5426634e7929541eC2318f3dCF7e` (ERC‑20, 6 decimals) | `usdc`, `usd coin`, `usdcoin` |
+| `ETH` | native | `eth`, `ether`, `ethereum` |
+
+**API**
+
+| Endpoint | Method | Purpose |
+|---|---|---|
+| `/api/transfers` | `GET` | List transfers, optionally filtered by status |
+| `/api/transfers` | `POST` | Record a browser‑wallet transaction hash, or reject an intent |
+| `/api/transfers/approve` | `POST` | Execute an approved agent‑wallet transfer |
+
+**Transfer and smart-contract tools**
+
+| Group | Tools |
+|---|---|
+| Transfers (Week 2) | `send_tokens`, `approve_transfer`, `reject_transfer` |
+| Persona (free) | `rate_sunset`, `count_pigeons`, `pirate_translate` |
+| Judge / ledger | `judge_deliverable`, `log_to_ledger`, `read_ledger`, `generate_report` |
+| Workflow | `run_gig_economy` (all three providers + 3 judgements + ranking in one call) |
+| Money (on‑chain) | `commission_job` (x402 + negotiation), `tip_provider` |
+| Governance | `set_provider_status` (blacklist/re‑activate) |
+| Wallet | `create_provider_wallet`, `get_provider_balances`, `get_my_wallet` |
 
 ## Demo Videos
-- **Demo recording** — [docs/screenrecording-2026-10-16_23-56-10.mp4](docs/screenrecording-2026-10-16_23-56-10.mp4): a recorded walkthrough of the app.
-- **Week 1** – Initial setup, first gig run, and first judge score.
-- **Week 2** – Scaling to three providers, commission flow, and tip settlement.
-- **Week 3** – Full x402 payment cycle, leaderboard, and future roadmap.
+
+Demo links (replace with the published URLs once the videos are hosted):
+
+- **Week 1 (the-useless-economy.v1):** https://github.com/sharifmdathar/the-useless-economy/releases — initial setup, first gig run, first judge score.
+- **Week 2 (the-useless-economy.v2):** https://github.com/sharifmdathar/the-useless-economy/releases — natural-language transfers, the review card, approval, and on-chain settlement.
+- **Week 3 (the-useless-economy.v3):** https://github.com/sharifmdathar/the-useless-economy/releases — full x402 payment cycle, leaderboard, and roadmap.
+
+Raw files live in `docs/`:
+- `docs/screenrecording-2026-10-16_23-56-10.mp4` — Week 1 walkthrough (67s, silent).
+- `docs/DEMO_VIDEO_GUIDE.md` — the Week 2 recording script (narration + shot list); the rendered file is added here once the capture is done.
 
 ## Future Scope
+- **ERC‑721 / NFT** – mint and transfer an NFT with the same prompt→review→approve flow, Base Sepolia only. Deliberately deferred until the ERC‑20 transfer path was solid.
+- **Multi‑signature approvals** – a transfer above a high‑water mark requires two approvals (agent + user) before it settles.
 - **ZK Integration** – add Zero‑Knowledge proofs for confidential job descriptions.
 - **Multi‑Chain Support** – extend beyond Base Sepolia to mainnet (requires extra bridges).
 - **Dynamic Pricing** – machine‑learned price floors based on historical performance.
 - **Community Marketplace** – let users post jobs and vote on provider rankings.
 - **Analytics Dashboard** – real‑time visualisation of scores, earnings, and provider health.
+- **Scheduled / recurring payments** – a standing order the agent can honour, still behind the same approval gate.
 
 ## Social Media
-- **Twitter/X** – @riseinweb3 (tagged in all posts)
+- **Twitter/X** – [@riseinweb3](https://x.com/riseinweb3) (tagged in all posts).
+- **Product page** – [@theuselesseconomy](https://x.com/theuselesseconomy) — dedicated account for this product; pinned post summarises the stack.
 - **Discord** – community discussion channel for developers and users.
-- **GitHub** – source code and demo artifacts.
+- **GitHub** – source code and demo artifacts: https://github.com/sharifmdathar/the-useless-economy
 
 ## Quick Start
 ```bash
@@ -113,9 +180,12 @@ All of it lives in `.env` (see `.env.example`):
 | `PAYWALL` | `0` | `1` makes provider routes answer a real 402 |
 | `KILL_SWITCH` | `0` | `1` freezes commissioning and tipping |
 | `PROVIDER_PRIVATE_KEY` | unset | Provider settlement wallet |
-| `PROVIDER_PAY_TO_OVERRIDE` | unset | Force one payout address |
+| `PROVIDER_PAY_TO_OVERRIDE` | unset | Force one payout address (the funded provider wallet is used by default) |
+| `MAX_TRANSFER_USDC` | `100` | Per‑transfer ceiling for user-initiated transfers |
+| `MAX_DAILY_TRANSFER_USDC` | `500` | Rolling 24h ceiling across all user-initiated transfers |
+| `X402_FACILITATOR_URL` | `https://x402.org/facilitator` | Gas‑sponsoring facilitator used for USDC settlement |
 
-Generated at runtime and gitignored: `.agent-wallet.json`, `.provider-wallet.json`, `ledger.json`, `.provider-status.json`, `report.md`.
+Generated at runtime and gitignored: `.agent-wallet.json`, `.provider-wallet.json`, `ledger.json`, `settlements.json`, `.transfers.json`, `.provider-status.json`, `report.md`.
 
 ## Contributing
 Contributions are welcome! Focus on:

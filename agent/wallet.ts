@@ -21,20 +21,25 @@ import {
   formatEther,
   formatUnits,
   http,
+  parseEther,
   type Address,
   type Hex,
 } from "viem";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import { baseSepolia } from "viem/chains";
+import {
+  BASE_SEPOLIA_CHAIN_ID,
+  USDC_ADDRESS,
+  USDC_DECIMALS,
+  USDC_EIP712_DOMAIN,
+} from "./usdc";
+import { settleWithFacilitator, newNonce } from "@/lib/facilitator";
 
 const WALLET_FILE = path.join(process.cwd(), ".agent-wallet.json");
 const PROVIDER_WALLET_FILE = path.join(process.cwd(), ".provider-wallet.json");
 const chain = baseSepolia; // TESTNET ONLY — never swap for mainnet
 
-// Circle's testnet USDC on Base Sepolia.
-export const USDC_ADDRESS: Address =
-  "0x036CbD53842c5426634e7929541eC2318f3dCF7e";
-export const USDC_DECIMALS = 6;
+export { USDC_ADDRESS, USDC_DECIMALS };
 
 // USDC ABI trimmed to the functions used here.
 const USDC_ABI = [
@@ -64,6 +69,27 @@ const USDC_ABI = [
   },
 ] as const;
 
+/** Minimal ERC-20 ABI for the functions this app calls directly. */
+export const ERC20_ABI = [
+  {
+    name: "transfer",
+    type: "function",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "to", type: "address" },
+      { name: "value", type: "uint256" },
+    ],
+    outputs: [{ name: "", type: "bool" }],
+  },
+  {
+    name: "balanceOf",
+    type: "function",
+    stateMutability: "view",
+    inputs: [{ name: "account", type: "address" }],
+    outputs: [{ name: "", type: "uint256" }],
+  },
+] as const;
+
 export type X402Requirement = {
   price: string;
   asset: Address;
@@ -80,12 +106,16 @@ export type X402PaymentBody = {
   nonce: Hex;
 };
 
-export const X402_DOMAIN = {
-  name: "USD Coin",
-  version: "2",
-  chainId: chain.id,
-  verifyingContract: USDC_ADDRESS,
-} as const;
+/**
+ * EIP-712 domain for Base Sepolia USDC.
+ *
+ * The name MUST be "USDC" — that is what the Base Sepolia contract's own
+ * `name()` returns. The commonly-copied "USD Coin" pair (correct for
+ * Ethereum mainnet USDC) produces signatures the contract rejects with
+ * "FiatTokenV2: invalid signature", which silently zeroed out every x402
+ * settlement recorded in ledger.json.
+ */
+export const X402_DOMAIN = USDC_EIP712_DOMAIN;
 export const X402_TYPES = {
   TransferWithAuthorization: [
     { name: "from", type: "address" },
@@ -127,6 +157,15 @@ function requireAccount() {
       "The agent has no wallet yet. Ask the user to click 'Create wallet' first.",
     );
   return account;
+}
+
+/**
+ * The agent's signing account, or a hard error if there is none.
+ * Exported so the transfer engine can sign with the same key the x402 buyer
+ * uses, without re-implementing the key lookup.
+ */
+export function loadAccountForTransfer() {
+  return requireAccount();
 }
 
 /** The provider-side settlement wallet (distinct so balances move visibly). */
@@ -234,9 +273,9 @@ export async function payAndFetch(url: string, opts?: { maxPrice?: number }) {
   const account = requireAccount();
   const validAfter = 0n;
   const validBefore = BigInt(Math.floor(Date.now() / 1000) + 3600); // ~1h window
-  const nonce = (crypto.randomUUID() + crypto.randomUUID())
-    .replace(/-/g, "")
-    .slice(0, 32);
+  // EIP-3009 nonce is bytes32 — exactly 32 bytes (64 hex chars). The
+  // contract rejects a shorter nonce with "invalid nonce".
+  const nonce = newNonce();
   const value = BigInt(Math.round(price * 10 ** USDC_DECIMALS));
 
   const message: X402PaymentBody = {
@@ -245,8 +284,8 @@ export async function payAndFetch(url: string, opts?: { maxPrice?: number }) {
     value,
     validAfter,
     validBefore,
-    // bytes32 nonce for EIP-3009
-    nonce: `0x${nonce}` as Hex,
+    // bytes32 nonce for EIP-3009 (newNonce() already carries the 0x prefix)
+    nonce,
   };
 
   // viem signs typed data with the account's key locally (never sends the key).
@@ -263,7 +302,15 @@ export async function payAndFetch(url: string, opts?: { maxPrice?: number }) {
   const header = Buffer.from(
     JSON.stringify({
       scheme: "eip3009",
-      payment: { ...message, value: value.toString() }, // JSON-safe
+      // JSON-safe: every bigint field must be a string, or JSON.stringify
+      // throws "Do not know how to serialize a BigInt" and no payment is ever
+      // signed. (This silently broke every x402 payment before.)
+      payment: {
+        ...message,
+        value: value.toString(),
+        validAfter: validAfter.toString(),
+        validBefore: validBefore.toString(),
+      },
       signature,
       asset: req.asset,
       resource: req.resource,
@@ -320,9 +367,15 @@ export async function verifyPayment(header: string | null) {
 }
 
 /**
- * Provider settles straight from the incoming request header: verify, then
- * broadcast transferWithAuthorization with the buyer's signature components.
- * Returns the on-chain settlement tx hash.
+ * Provider settles an incoming X-PAYMENT header.
+ *
+ * The settlement goes through the x402 facilitator, which broadcasts the
+ * transferWithAuthorization and PAYS THE GAS. The provider wallet holds no
+ * ETH, so settling locally (writeContract) could never work — every
+ * settlement in ledger.json before this was recorded as paidAmount 0.
+ *
+ * The facilitator can only spend what the buyer's signature authorizes; it
+ * cannot change the amount or the destination.
  */
 export async function settlePaymentFromHeader(
   header: string,
@@ -330,34 +383,28 @@ export async function settlePaymentFromHeader(
   const payment = await verifyPayment(header);
   if (!payment) throw new Error("Invalid or expired X-PAYMENT authorization.");
 
+  const { signature } = parseHeader(header);
   const account = loadProviderAccount() ?? loadAccount();
   if (!account) throw new Error("No settlement wallet available.");
 
-  const { signature } = parseHeader(header);
-  // Split r/s/v from the 65-byte hex signature: 32B r, 32B s, 1B v.
-  const r = `0x${signature.slice(2, 66)}` as Hex;
-  const s = `0x${signature.slice(66, 130)}` as Hex;
-  const v = Number.parseInt(signature.slice(130, 132), 16);
+  const result = await settleWithFacilitator(
+    {
+      from: payment.from,
+      to: payment.to,
+      value: payment.value,
+      validAfter: payment.validAfter,
+      validBefore: payment.validBefore,
+      nonce: payment.nonce,
+    },
+    signature,
+    "https://the-useless-economy.local/provider",
+    "x402 provider commission",
+  );
 
-  const tx = await createWalletClient({
-    account,
-    chain,
-    transport: http(),
-  }).writeContract({
-    address: USDC_ADDRESS,
-    abi: USDC_ABI,
-    functionName: "transferWithAuthorization",
-    args: [
-      payment.from,
-      payment.to,
-      payment.value,
-      payment.validAfter,
-      payment.validBefore,
-      payment.nonce,
-      v,
-      r,
-      s,
-    ],
-  });
-  return { tx, payment };
+  if (!result.success || !result.txHash) {
+    throw new Error(
+      `Facilitator settlement failed: ${result.error ?? "unknown error"}`,
+    );
+  }
+  return { tx: result.txHash, payment };
 }

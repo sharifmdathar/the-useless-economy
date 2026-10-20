@@ -1,5 +1,6 @@
 import { MODEL, runAgent, ACTIVE_PROVIDER } from "@/agent/agent";
 import { tools } from "@/agent/tools";
+import { getTransfer } from "@/agent/transfers";
 
 // GET /api/agent -> setup status + the list of tools (shown on the page)
 export async function GET() {
@@ -39,7 +40,18 @@ export async function POST(req: Request) {
     const result = await runAgent(messages, {
       baseUrl: new URL(req.url).origin,
     });
-    return Response.json(result);
+
+    // Surface any transfer the agent prepared, so the chat can render a
+    // review card the user approves BEFORE anything is signed.
+    const pending = result.steps
+      .map((s) => {
+        const r = s.result as { transferId?: string } | undefined;
+        if (!r?.transferId) return null;
+        return getTransfer(r.transferId) ?? null;
+      })
+      .filter((t): t is NonNullable<typeof t> => t !== null);
+
+    return Response.json({ ...result, transfers: pending });
   } catch (err) {
     return Response.json(
       { error: err instanceof Error ? err.message : String(err) },

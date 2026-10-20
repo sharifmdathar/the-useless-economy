@@ -27,7 +27,19 @@ import {
 import { createPublicClient, formatUnits } from "viem";
 import { baseSepolia } from "viem/chains";
 import { PROVIDERS } from "@/lib/providers";
+import { gaslessUsdcTransfer } from "@/lib/facilitator";
+import { recordSettlement, takeUnloggedSettlement } from "./settlements";
 import { callLLM, extractJson, withRetry } from "@/lib/llm";
+import {
+  createPendingTransfer,
+  executeAgentTransfer,
+  listTransfers,
+  rejectTransfer,
+  getTransfer,
+  MAX_TRANSFER,
+  MAX_DAILY_TRANSFER,
+} from "@/agent/transfers";
+import { resolveToken, SUPPORTED_TOKENS } from "@/agent/tokens";
 export { MODEL } from "@/lib/llm";
 
 const CHAIN_ID = 84532; // Base Sepolia — TESTNET ONLY
@@ -391,11 +403,13 @@ export const coreTools: Tool[] = [
         },
         paidAmount: {
           type: "number",
-          description: "What actually settled in USDC (0 if free run)",
+          description:
+            "What actually settled in USDC (0 if free run). IGNORED — the real settled amount is read from the on-chain settlement record, not from the model.",
         },
         txHash: {
           type: "string",
-          description: "x402 settlement tx hash, if paid",
+          description:
+            "x402 settlement tx hash, if paid. IGNORED — read from the settlement record.",
         },
       },
       required: ["provider_name", "deliverable_text"],
@@ -405,10 +419,20 @@ export const coreTools: Tool[] = [
       deliverable_text,
       job = "",
       quotedPrice = 0,
-      paidAmount = 0,
-      txHash,
+      paidAmount: claimedPaid,
+      txHash: claimedTx,
     }) => {
       const judgement = await judge(provider_name, deliverable_text);
+
+      // The settled amount is CODE-recorded at settlement time, not
+      // LLM-reported. Prefer the real settlement record; fall back to what
+      // the model claims only if no settlement was recorded at all.
+      const settlement = await takeUnloggedSettlement(provider_name);
+      const paidAmount = settlement
+        ? settlement.amountUsdc
+        : (claimedPaid ?? 0);
+      const txHash = settlement?.txHash ?? claimedTx;
+
       const ledger = await logToLedger({
         job,
         provider: provider_name,
@@ -424,6 +448,8 @@ export const coreTools: Tool[] = [
         provider: provider_name,
         ...judgement,
         ledgerRows: ledger.length,
+        paidAmount,
+        ...(txHash ? { txHash } : {}),
       };
     },
   },
@@ -635,13 +661,24 @@ export const paidTools: Tool[] = [
           (second.payment as { status?: string } | undefined)?.status ===
           "settled"
         ) {
+          const tx = (second.payment as { tx?: string }).tx;
+          // Record the real settlement so the ledger row can carry the
+          // amount that actually moved, not whatever the model claims.
+          if (tx) {
+            await recordSettlement({
+              provider,
+              job,
+              amountUsdc: counterOffer,
+              txHash: tx,
+            });
+          }
           return {
             provider,
             job,
             negotiated: true,
             counterOffer,
             paid: counterOffer,
-            tx: (second.payment as { tx?: string }).tx,
+            tx,
             deliverable: second.data,
           };
         }
@@ -658,12 +695,23 @@ export const paidTools: Tool[] = [
       if (
         (first.payment as { status?: string } | undefined)?.status === "settled"
       ) {
+        const tx = (first.payment as { tx?: string }).tx;
+        // Record the real settlement so the ledger row can carry the amount
+        // that actually moved, not whatever the model claims.
+        if (tx) {
+          await recordSettlement({
+            provider,
+            job,
+            amountUsdc: meta.ask,
+            txHash: tx,
+          });
+        }
         return {
           provider,
           job,
           negotiated: false,
           paid: meta.ask,
-          tx: (first.payment as { tx?: string }).tx,
+          tx,
           deliverable: first.data,
         };
       }
@@ -702,7 +750,6 @@ export const paidTools: Tool[] = [
         );
 
       const { privateKeyToAccount } = await import("viem/accounts");
-      const { createWalletClient, http } = await import("viem");
       const key = process.env.WALLET_PRIVATE_KEY
         ? (process.env.WALLET_PRIVATE_KEY.trim() as `0x${string}`)
         : ((
@@ -715,28 +762,23 @@ export const paidTools: Tool[] = [
           ).privateKey.trim() as `0x${string}`);
       // Never log the key — it is only used to sign locally.
       const account = privateKeyToAccount(key);
-      const client = createWalletClient({
+
+      // Gasless: the agent signs an EIP-3009 authorization OFF-CHAIN and the
+      // x402 facilitator broadcasts it while paying the gas. The agent wallet
+      // holds USDC but no ETH, so a direct USDC.transfer() could never work.
+      const result = await gaslessUsdcTransfer({
         account,
-        chain: baseSepolia,
-        transport: http(),
+        to: to as `0x${string}`,
+        value: BigInt(Math.round(amountUsdc * 10 ** 6)),
+        resource: "https://the-useless-economy.local/tip",
+        description: `Tip ${provider} ${amountUsdc} USDC`,
       });
-      const tx = await client.writeContract({
-        address: USDC_ADDRESS,
-        abi: [
-          {
-            name: "transfer",
-            type: "function",
-            stateMutability: "nonpayable",
-            inputs: [
-              { name: "to", type: "address" },
-              { name: "value", type: "uint256" },
-            ],
-            outputs: [],
-          },
-        ] as const,
-        functionName: "transfer",
-        args: [to, BigInt(Math.round(amountUsdc * 10 ** 6))],
-      });
+      if (!result.success || !result.txHash) {
+        throw new Error(
+          `Tip settlement failed: ${result.error ?? "unknown facilitator error"}`,
+        );
+      }
+      const tx = result.txHash;
 
       const row = await applyTip(provider, amountUsdc, tx);
       return {
@@ -745,7 +787,7 @@ export const paidTools: Tool[] = [
         to,
         tipTxHash: tx,
         ledgerRow: row,
-        note: "On-chain USDC transfer submitted on Base Sepolia (testnet).",
+        note: "On-chain USDC transfer settled via the x402 facilitator (gas sponsored) on Base Sepolia (testnet).",
       };
     },
   },
@@ -915,6 +957,181 @@ export const paidTools: Tool[] = [
   },
 ];
 
+// ─── WEEK 2 TOOLS: prompt-based crypto transfers (Base Sepolia, TESTNET ONLY)
+//
+// The CORE Week 2 requirement: a user types "send 10 USDC to 0x…" in natural
+// language, the agent extracts token + amount + recipient, and a transaction
+// goes out on-chain.
+//
+// Two-phase by design:
+//   1. `send_tokens` VALIDATES the intent and files a pending transfer. It
+//      does not sign. The user sees a review card in the chat.
+//   2. The user approves (approve_transfer), and only then is it signed and
+//      broadcast. Rejecting it costs nothing.
+//
+// Splitting parse (model) from validation (code) is the point: the LLM is
+// good at reading "send 10 USDC to 0x…", bad at guaranteeing the result is
+// safe. Every cap and address check below is enforced in code, never in a
+// prompt, so a jailbroken or confused model cannot move funds it shouldn't.
+
+export const transferTools: Tool[] = [
+  {
+    name: "send_tokens",
+    description:
+      "Send crypto from a natural-language request. Extracts token, amount and recipient from the user's request, validates them, and files a PENDING transfer for the user to review in the chat. NOTHING is signed or sent until the user approves it with approve_transfer. Params: token (USDC|ETH), amount (number), recipient (0x address), source (agent_wallet|user_wallet, default agent_wallet), prompt (the original user request, for the audit trail).",
+    parameters: {
+      type: "object",
+      properties: {
+        token: {
+          type: "string",
+          enum: SUPPORTED_TOKENS,
+          description: "Which token to send. Only USDC and ETH are supported.",
+        },
+        amount: {
+          type: "number",
+          description: "How much to send, e.g. 10 for '10 USDC'",
+        },
+        recipient: {
+          type: "string",
+          description: "Destination wallet address (0x...)",
+        },
+        source: {
+          type: "string",
+          enum: ["agent_wallet", "user_wallet"],
+          description:
+            "Which wallet funds it. 'agent_wallet' (default) signs server-side. 'user_wallet' means the user's own connected wallet signs in the browser.",
+        },
+        prompt: {
+          type: "string",
+          description: "The user's original request, recorded for the audit trail.",
+        },
+      },
+      required: ["token", "amount", "recipient"],
+    },
+    run: async ({ token, amount, recipient, source, prompt }) => {
+      const def = resolveToken(token);
+      if (!def) {
+        throw new Error(
+          `Unsupported token "${token}". Supported: ${SUPPORTED_TOKENS.join(", ")}.`,
+        );
+      }
+      const transfer = await createPendingTransfer({
+        token,
+        amount,
+        recipient,
+        source: source ?? "agent_wallet",
+        prompt: prompt ?? "",
+      });
+      return {
+        transferId: transfer.id,
+        status: "pending_user_approval",
+        token: transfer.token,
+        amount: transfer.amount,
+        recipient: transfer.recipient,
+        source: transfer.source,
+        perTransferCap: MAX_TRANSFER,
+        dailyCap: MAX_DAILY_TRANSFER,
+        message:
+          "Transfer prepared but NOT sent. Show the user the details and ask them to approve; call approve_transfer only after they say yes.",
+        nextStep:
+          "Ask the user to confirm. On approval call approve_transfer with this transferId.",
+      };
+    },
+  },
+  {
+    name: "approve_transfer",
+    description:
+      "Execute a pending transfer that the user has explicitly approved. Signs and broadcasts the on-chain transaction from the agent's wallet (Base Sepolia testnet). ONLY call this after the user has confirmed the transfer in the chat. Params: transfer_id.",
+    parameters: {
+      type: "object",
+      properties: {
+        transfer_id: {
+          type: "string",
+          description: "The id returned by send_tokens",
+        },
+      },
+      required: ["transfer_id"],
+    },
+    run: async ({ transfer_id }) => {
+      const pending = getTransfer(transfer_id);
+      if (!pending) throw new Error(`No transfer with id ${transfer_id}.`);
+      if (pending.status === "executed") {
+        return {
+          transferId: transfer_id,
+          status: "executed",
+          txHash: pending.txHash,
+          note: "This transfer was already executed.",
+        };
+      }
+      if (pending.status !== "pending") {
+        throw new Error(
+          `Transfer ${transfer_id} is ${pending.status} and cannot be approved.`,
+        );
+      }
+      const result = await executeAgentTransfer(transfer_id);
+      if (result.status === "failed") {
+        return {
+          transferId: transfer_id,
+          status: "failed",
+          reason: result.reason,
+          note: "The transaction failed. Nothing was transferred.",
+        };
+      }
+      return {
+        transferId: transfer_id,
+        status: "executed",
+        txHash: result.txHash,
+        token: result.token,
+        amount: result.amount,
+        recipient: result.recipient,
+        explorer: `https://sepolia.basescan.org/tx/${result.txHash}`,
+        note: "Transfer settled on Base Sepolia (testnet).",
+      };
+    },
+  },
+  {
+    name: "reject_transfer",
+    description:
+      "Cancel a pending transfer the user declined. Nothing was signed, so this is always safe. Params: transfer_id, optional reason.",
+    parameters: {
+      type: "object",
+      properties: {
+        transfer_id: { type: "string", description: "The id returned by send_tokens" },
+        reason: { type: "string", description: "Why it was declined" },
+      },
+      required: ["transfer_id"],
+    },
+    run: async ({ transfer_id, reason }) => {
+      const row = await rejectTransfer(transfer_id, reason);
+      return {
+        transferId: row.id,
+        status: row.status,
+        note: "Transfer cancelled. Nothing was sent and no funds moved.",
+      };
+    },
+  },
+  {
+    name: "list_transfers",
+    description:
+      "List the user's crypto transfers (pending, executed, rejected) with their ids, amounts, recipients and transaction hashes. Params: optional status filter.",
+    parameters: {
+      type: "object",
+      properties: {
+        status: {
+          type: "string",
+          enum: ["pending", "approved", "rejected", "executed", "failed"],
+          description: "Optional status filter",
+        },
+      },
+    },
+    run: async ({ status }) => ({
+      transfers: listTransfers(status),
+      caps: { perTransfer: MAX_TRANSFER, daily: MAX_DAILY_TRANSFER },
+      network: "Base Sepolia (testnet)",
+    }),
+  },
+];
+
 /** The on-chain sink for a provider's tips and x402 payTo (env override first). */
 function getProviderPayTo(provider: string): `0x${string}` {
   const envSink = process.env.PROVIDER_PAY_TO_OVERRIDE as
@@ -936,8 +1153,12 @@ function buildParams(provider: string, job: string): string {
   return `location=${encodeURIComponent(job)}&request=${encodeURIComponent(job)}`;
 }
 
-/** The full tool surface the agent sees: free persona tools + judge/ledger + paid tools. */
-export const tools: Tool[] = [...coreTools, ...paidTools];
+/** The full tool surface the agent sees: free persona tools + judge/ledger + paid tools + transfers. */
+export const tools: Tool[] = [
+  ...coreTools,
+  ...paidTools,
+  ...transferTools,
+];
 
 // ─── CAP-ENFORCEMENT TEST HOOKS (exposed for direct guardrail verification).
 // These are NOT part of the Gemini-visible tool surface; they exist so the

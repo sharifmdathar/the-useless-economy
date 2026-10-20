@@ -29,6 +29,10 @@ import {
 } from "@/components/ui/collapsible";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  TransferCard,
+  type TransferCardData,
+} from "@/components/transfer-card";
 import { cn } from "@/lib/utils";
 
 type Step = { tool: string; args: unknown; result: any; error?: boolean };
@@ -36,6 +40,7 @@ type Message = {
   role: "user" | "agent";
   text: string;
   steps?: Step[];
+  transfers?: TransferCardData[];
   error?: boolean;
 };
 type Status = {
@@ -46,9 +51,9 @@ type Status = {
 type WalletInfo = { address: string | null; balance?: string };
 
 const EXAMPLES = [
-  "What's the weather in Mumbai?",
+  "Send 1 USDC to 0x000000000000000000000000000000000000dEaD",
   "What's in your wallet?",
-  "Roll a 20 sided dice",
+  "Run the economy on a golden sunset over the Tagus, Lisbon",
 ];
 
 export default function Home() {
@@ -105,9 +110,16 @@ export default function Home() {
         ...m,
         data.error
           ? { role: "agent", text: data.error, error: true }
-          : { role: "agent", text: data.answer, steps: data.steps },
+          : {
+              role: "agent",
+              text: data.answer,
+              steps: data.steps,
+              transfers: data.transfers,
+            },
       ]);
       if (data.steps?.some((s: Step) => s.result?.payment)) loadWallet();
+      // A prepared transfer is not money moved yet — nothing to refresh.
+      if (data.transfers?.length) loadWallet();
     } catch {
       setMessages((m) => [
         ...m,
@@ -307,6 +319,29 @@ export default function Home() {
                     <div className="flex min-w-0 flex-col gap-2">
                       {m.steps?.map((s, j) => (
                         <ToolCall key={j} step={s} />
+                      ))}
+                      {m.transfers?.map((t) => (
+                        <TransferCard
+                          key={t.id}
+                          transfer={t}
+                          onApproved={(id) => approveAgentTransfer(id, setMessages, loadWallet)}
+                          onRejected={(id) => {
+                            setMessages((prev) =>
+                              prev.map((msg) =>
+                                msg.transfers?.some((x) => x.id === id)
+                                  ? {
+                                      ...msg,
+                                      transfers: msg.transfers.map((x) =>
+                                        x.id === id
+                                          ? { ...x, status: "rejected" }
+                                          : x,
+                                      ),
+                                    }
+                                  : msg,
+                              ),
+                            );
+                          }}
+                        />
                       ))}
                       <div
                         className={cn(
@@ -557,4 +592,59 @@ function Json({ label, value }: { label: string; value: unknown }) {
       </pre>
     </div>
   );
+}
+
+/**
+ * Execute an approved transfer from the AGENT's wallet.
+ *
+ * The approval click in the TransferCard is the authorization, so the server
+ * signs here directly via the same approve_transfer tool the agent would
+ * call — one code path, two entry points, one set of guardrails.
+ */
+async function approveAgentTransfer(
+  id: string,
+  setMessages: React.Dispatch<React.SetStateAction<Message[]>>,
+  loadWallet: () => void,
+) {
+  try {
+    const res = await fetch("/api/transfers/approve", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ transferId: id }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error ?? "Approval failed.");
+
+    setMessages((prev) =>
+      prev.map((msg) =>
+        msg.transfers?.some((t) => t.id === id)
+          ? {
+              ...msg,
+              transfers: msg.transfers.map((t) =>
+                t.id === id
+                  ? { ...t, status: "executed", txHash: data.txHash }
+                  : t,
+              ),
+            }
+          : msg,
+      ),
+    );
+    loadWallet();
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    setMessages((prev) =>
+      prev.map((msg) =>
+        msg.transfers?.some((t) => t.id === id)
+          ? {
+              ...msg,
+              transfers: msg.transfers.map((t) =>
+                t.id === id
+                  ? { ...t, status: "failed", reason: message }
+                  : t,
+              ),
+            }
+          : msg,
+      ),
+    );
+  }
 }
