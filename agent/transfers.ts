@@ -24,7 +24,7 @@ import { createPublicClient, createWalletClient, http, type Address, type Hex } 
 import { baseSepolia } from "viem/chains";
 import { privateKeyToAccount } from "viem/accounts";
 import { ERC20_ABI, USDC_ADDRESS, loadAccountForTransfer, USDC_DECIMALS } from "./wallet";
-import { gaslessUsdcTransfer } from "@/lib/facilitator";
+import { gaslessUsdcTransfer } from "@/lib/facilitator-retry";
 import {
   amountToUnits,
   isValidRecipient,

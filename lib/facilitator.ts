@@ -252,60 +252,6 @@ export async function settleWithFacilitator(
   };
 }
 
-/**
- * Full gasless transfer: sign off-chain, settle via the facilitator, and
- * confirm the receipt. Returns the tx hash only after the chain reports
- * success.
- */
-export async function gaslessUsdcTransfer(args: {
-  account: { address: Address; signTypedData: (args: any) => Promise<Hex> };
-  to: Address;
-  value: bigint;
-  resource?: string;
-  description?: string;
-}): Promise<FacilitatorResult> {
-  if (baseSepolia.id !== CHAIN_ID) {
-    throw new Error(
-      `Chain ID mismatch: expected ${CHAIN_ID} (Base Sepolia), got ${baseSepolia.id}.`,
-    );
-  }
-
-  const authorization: Eip3009Authorization = {
-    from: args.account.address,
-    to: args.to,
-    value: args.value,
-    validAfter: 0n,
-    validBefore: nowSeconds() + 3600n,
-    nonce: newNonce(),
-  };
-
-  const signature = await signEip3009(args.account, authorization);
-  const result = await settleWithFacilitator(
-    authorization,
-    signature,
-    args.resource,
-    args.description,
-  );
-  if (!result.success || !result.txHash) {
-    return { success: false, error: result.error ?? "Settlement failed." };
-  }
-
-  // Confirm the chain actually accepted it before reporting success.
-  const client = createPublicClient({ chain: baseSepolia, transport: http() });
-  const receipt = await client.waitForTransactionReceipt({
-    hash: result.txHash,
-    timeout: 60_000,
-  });
-  if (receipt.status !== "success") {
-    return {
-      success: false,
-      txHash: result.txHash,
-      error: `Transaction reverted on chain (status=${receipt.status}).`,
-    };
-  }
-  return { success: true, txHash: result.txHash, payer: result.payer };
-}
-
 /** USDC balance of any address, as a decimal string. */
 export async function usdcBalanceOf(address: Address): Promise<string> {
   const client = createPublicClient({ chain: baseSepolia, transport: http() });

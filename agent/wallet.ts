@@ -34,6 +34,7 @@ import {
   USDC_EIP712_DOMAIN,
 } from "./usdc";
 import { settleWithFacilitator, newNonce } from "@/lib/facilitator";
+import { settleWithFacilitatorRetry } from "@/lib/facilitator-retry";
 
 const WALLET_FILE = path.join(process.cwd(), ".agent-wallet.json");
 const PROVIDER_WALLET_FILE = path.join(process.cwd(), ".provider-wallet.json");
@@ -387,8 +388,8 @@ export async function settlePaymentFromHeader(
   const account = loadProviderAccount() ?? loadAccount();
   if (!account) throw new Error("No settlement wallet available.");
 
-  const result = await settleWithFacilitator(
-    {
+  const result = await settleWithFacilitatorRetry({
+    authorization: {
       from: payment.from,
       to: payment.to,
       value: payment.value,
@@ -397,9 +398,9 @@ export async function settlePaymentFromHeader(
       nonce: payment.nonce,
     },
     signature,
-    "https://the-useless-economy.local/provider",
-    "x402 provider commission",
-  );
+    resource: "https://the-useless-economy.local/provider",
+    description: "x402 provider commission",
+  });
 
   if (!result.success || !result.txHash) {
     throw new Error(

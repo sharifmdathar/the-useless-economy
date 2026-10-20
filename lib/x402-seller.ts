@@ -14,6 +14,7 @@ import {
   type X402PaymentBody,
 } from "@/agent/wallet";
 import { PROVIDERS, type ProviderSlug } from "./providers";
+import { isRelayerCollision } from "./facilitator-retry";
 
 export function providerBySlug(slug: string) {
   const found = PROVIDERS.find((p) => p.slug === slug);
@@ -101,14 +102,23 @@ export async function guardOrSettle(
   try {
     ({ tx } = await settlePaymentFromHeader(header));
   } catch (err) {
-    // Typical causes: settlement wallet has no ETH for gas, or the network is
-    // unreachable. Return a clear error instead of a 500 crash.
+    // Typical causes: the facilitator's relayer lost a nonce race, the
+    // network is unreachable, or the settlement wallet is unusable. Return a
+    // clear error instead of a 500 crash.
     const reason = err instanceof Error ? err.message : String(err);
+    // A relayer nonce collision is transient — the same authorization is
+    // still valid, so the client can retry. Signal that with 503 rather
+    // than a permanent-looking 502.
+    const transient = isRelayerCollision(reason);
     return {
       kind: "requirements",
       response: Response.json(
-        { error: "Settlement failed", reason },
-        { status: 502 },
+        {
+          error: transient ? "Settlement temporarily unavailable" : "Settlement failed",
+          reason,
+          retryable: transient,
+        },
+        { status: transient ? 503 : 502 },
       ),
     };
   }

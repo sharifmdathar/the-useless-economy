@@ -163,9 +163,50 @@ npm run dev
 #    (or set WALLET_PRIVATE_KEY in .env to reuse an existing test wallet)
 ```
 
+> **If `npm run build` fails with `Cannot find module '@tailwindcss/postcss'`:**
+> `NODE_ENV=production` makes npm skip devDependencies, and the PostCSS plugin
+> is a devDependency. Install with `npm ci --include=dev` (or unset
+> `NODE_ENV`) before building.
+
 Provider routes run free unless `PAYWALL=1`, which makes them answer a real x402 `402` until paid. Tips still transfer on‑chain on Base Sepolia, so the agent wallet needs a little testnet ETH and USDC.
 
+> **The agent wallet does not need ETH.** USDC transfers, x402 settlement, and
+> tips are all relayed by the x402 facilitator, which pays the gas. Only
+> native ETH transfers need testnet ETH on the agent wallet.
+
+### Trying a transfer
+
+Ask the agent in plain English — “send 1 USDC to 0x…”, “send 0.5 ETH to
+0x…”, “transfer 2 USDC to 0x…”. The agent parses the intent, validates it in
+code, and shows a review card. Press **Approve** to sign and settle on Base
+Sepolia, or **Reject** to cancel. The transaction hash appears in the chat
+after it settles.
+
 Other scripts: `npm run build` (production build), `npm run typecheck` (`tsc --noEmit`), `npm start`.
+
+### Verification scripts
+
+Live Base Sepolia tests (they spend real testnet USDC):
+
+```bash
+# static validation: addresses, tokens, amounts, caps
+JITI_TSCONFIG_PATHS=true node_modules/.bin/jiti scripts/test-transfer-validation.ts
+
+# two-phase transfer: create -> approve -> settle on-chain
+JITI_TSCONFIG_PATHS=true node_modules/.bin/jiti scripts/test-transfer-live.ts
+
+# the facilitator path in isolation
+JITI_TSCONFIG_PATHS=true node_modules/.bin/jiti scripts/test-facilitator.ts
+
+# full buyer -> seller -> facilitator x402 payment, asserts the money moved
+JITI_TSCONFIG_PATHS=true node_modules/.bin/jiti scripts/test-x402-settlement.ts
+
+# the ledger records the amount that actually settled
+JITI_TSCONFIG_PATHS=true node_modules/.bin/jiti scripts/test-ledger-integrity.ts
+```
+
+`jiti` is installed transitively; the `JITI_TSCONFIG_PATHS=true` flag is
+required so the `@/` path alias resolves.
 
 ## Configuration
 All of it lives in `.env` (see `.env.example`):

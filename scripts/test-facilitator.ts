@@ -11,6 +11,7 @@ import { createPublicClient, http, createWalletClient, encodeFunctionData } from
 import { privateKeyToAccount } from "viem/accounts";
 import { baseSepolia } from "viem/chains";
 import fs from "node:fs";
+import { newNonce } from "@/lib/facilitator";
 
 const USDC = "0x036CbD53842c5426634e7929541eC2318f3dCF7e" as const;
 const RECIPIENT = "0x000000000000000000000000000000000000dEaD" as const;
@@ -71,7 +72,10 @@ async function main() {
     value: VALUE,
     validAfter: 0n,
     validBefore: now + 3600n,
-    nonce: `0x${"cd".repeat(32)}` as `0x${string}`,
+    // Must be a FRESH nonce every run. EIP-3009 authorizations are one-time
+    // use: once the contract has consumed one, re-submitting it reverts with
+    // "FiatTokenV2: authorization is used or canceled".
+    nonce: newNonce(),
   };
 
   // Domain name MUST be "USDC" for this contract (proved by simulation).

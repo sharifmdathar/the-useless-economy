@@ -27,7 +27,7 @@ import {
 import { createPublicClient, formatUnits } from "viem";
 import { baseSepolia } from "viem/chains";
 import { PROVIDERS } from "@/lib/providers";
-import { gaslessUsdcTransfer } from "@/lib/facilitator";
+import { gaslessUsdcTransfer } from "@/lib/facilitator-retry";
 import { recordSettlement, takeUnloggedSettlement } from "./settlements";
 import { callLLM, extractJson, withRetry } from "@/lib/llm";
 import {
