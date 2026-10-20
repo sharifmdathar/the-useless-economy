@@ -34,7 +34,9 @@ import {
   TransferCard,
   type TransferCardData,
 } from "@/components/transfer-card";
+import { StandingsTableView } from "@/components/standings-table";
 import { cn } from "@/lib/utils";
+import type { StandingsTable } from "@/agent/standings";
 
 type Step = { tool: string; args: unknown; result: any; error?: boolean };
 type Message = {
@@ -42,6 +44,7 @@ type Message = {
   text: string;
   steps?: Step[];
   transfers?: TransferCardData[];
+  standings?: StandingsTable;
   error?: boolean;
 };
 type Status = {
@@ -116,6 +119,7 @@ export default function Home() {
               text: data.answer,
               steps: data.steps,
               transfers: data.transfers,
+              standings: data.standings,
             },
       ]);
       if (data.steps?.some((s: Step) => s.result?.payment)) loadWallet();
@@ -321,6 +325,7 @@ export default function Home() {
                       {m.steps?.map((s, j) => (
                         <ToolCall key={j} step={s} />
                       ))}
+                      {m.standings && <StandingsTableView table={m.standings} />}
                       {m.transfers?.map((t) => (
                         <TransferCard
                           key={t.id}

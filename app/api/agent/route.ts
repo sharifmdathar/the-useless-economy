@@ -1,6 +1,10 @@
 import { MODEL, runAgent, ACTIVE_PROVIDER } from "@/agent/agent";
 import { tools } from "@/agent/tools";
 import { getTransfer } from "@/agent/transfers";
+import {
+  standingsFromSteps,
+  stripScoreClaims,
+} from "@/agent/standings";
 
 // GET /api/agent -> setup status + the list of tools (shown on the page)
 export async function GET() {
@@ -51,7 +55,22 @@ export async function POST(req: Request) {
       })
       .filter((t): t is NonNullable<typeof t> => t !== null);
 
-    return Response.json({ ...result, transfers: pending });
+    // The agent's closing answer is LLM prose. When the run was a gig
+    // economy run, that prose sometimes misreports the scores the tool
+    // actually recorded (it has been seen calling a 3 a five and inventing
+    // a tie-break). The recorded standings are the truth, so send them
+    // structured and drop the prose's own restatement of the same numbers.
+    const standings = standingsFromSteps(result.steps);
+    const answer = standings
+      ? stripScoreClaims(result.answer)
+      : result.answer;
+
+    return Response.json({
+      ...result,
+      answer,
+      transfers: pending,
+      ...(standings ? { standings } : {}),
+    });
   } catch (err) {
     return Response.json(
       { error: err instanceof Error ? err.message : String(err) },
