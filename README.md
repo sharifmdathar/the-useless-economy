@@ -54,7 +54,8 @@ Behaviour details that matter when configuring keys:
 - **Strict Quality Judge** – independent scorer (1–5) that evaluates deliverables against persona constraints. It runs through the same adapter, so it follows `LLM_PROVIDER`; if the judge’s JSON is unparseable it falls back to a heuristic score instead of failing the run.
 - **Real x402 Payments** – a provider route answers `402 Payment Required` with `{scheme:"eip3009", price, asset: USDC, payTo, facilitator}`; the manager signs an EIP‑3009 authorization with its own wallet, and the x402 facilitator relays it, pays the gas, and returns the transaction hash. The amount and hash are recorded in an append‑only `ledger.json`, written by the code that observed the settlement.
 - **Negotiation with Floors** – below a provider’s floor the counter‑offer is rejected; at or above it the provider accepts the lower price.
-- **Code‑Enforced Caps** – `0.05` USDC per job, `1` USDC per rolling 7 days, `KILL_SWITCH=1` freezes commission, tips, and transfers (both new intents and ones created before the switch was flipped). The limits live in `agent/tools.ts` and `agent/transfers.ts`, not in prompts.
+- **Exactly One Payment Per Commission** – negotiation happens *before* the single paid request, so one commission can never produce two funded settlements. The buyer refuses to sign if the provider’s `402` advertises a different price than the one it intended to pay, and the provider settles each authorization at most once (keyed by payer + EIP‑3009 nonce). The ledger and the spend cap both use the amount that actually moved on chain, not the catalog ask.
+- **Code‑Enforced Caps** – `0.05` USDC per job, `1` USDC per rolling 7 days, `KILL_SWITCH=1` freezes commission, tips, and transfers (both new intents and ones created before the switch was flipped). The limits live in `agent/tools.ts` and `agent/transfers.ts`, not in prompts. The weekly cap counts both ledger rows and payments that settled on chain but whose ledger row has not been written yet, so a payment that just left the wallet cannot slip past the cap.
 - **Grounded Standings** – the scores shown in the chat are derived in code from the recorded `run_gig_economy` result and rendered as a table, so the summary can never contradict the tool output.
 - **Weekly Report** – “State of the Useless Economy” summarises scores, leaderboard, spend, and incidents into `report.md`.
 - **Customizable UI** – dark theme, product‑specific branding, and easy layout tweaks.
@@ -232,6 +233,23 @@ JITI_TSCONFIG_PATHS=true node_modules/.bin/jiti scripts/test-tip-settlement.ts
 
 # the chat standings always agree with the recorded tool result
 JITI_TSCONFIG_PATHS=true node_modules/.bin/jiti scripts/test-standings-grounding.ts
+```
+
+Regression suite for the exactly-once payment guarantee (no network needed
+for the first one; the rest settle real testnet USDC):
+
+```bash
+# one commission can never produce two funded settlements
+npm run test:double-payment
+
+# the spend cap counts a settled-but-not-yet-ledgered payment exactly once
+npm run test:spend-cap
+
+# the real commission_job tool, against a live provider + facilitator
+npm run test:commission-live
+
+# independently read a settlement tx off chain and assert one transfer
+npm run verify:tx -- 0x<txhash> 0.04
 ```
 
 `jiti` is installed transitively; the `JITI_TSCONFIG_PATHS=true` flag is

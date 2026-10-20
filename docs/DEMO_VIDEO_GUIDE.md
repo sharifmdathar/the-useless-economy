@@ -229,6 +229,27 @@ captured from the running server.
 The recorded amount and hash come from the code that observed the settlement,
 not from what the model says happened.
 
+### One payment per commission
+The negotiation happens **before** the paid request. In this protocol asking a
+provider for its price is itself a paid request — the buyer signs whatever the
+`402` advertises and the provider settles it — so an "ask at the ask, then ask
+again at the counter-offer" sequence would produce two distinct
+authorizations and two funded transfers for one piece of work.
+
+Instead:
+- the price the agent intends to pay is the price it asks for;
+- the buyer **refuses to sign** if the provider's `402` advertises a different
+  price than the one it intended to pay;
+- the provider settles each authorization at most once, keyed by payer +
+  EIP-3009 nonce, so a replayed payment header returns the original
+  transaction instead of touching the chain again;
+- the ledger and the spend cap both use the amount that actually moved.
+
+This is regression-tested end to end against Base Sepolia: the real
+`commission_job` tool is driven through a live provider and a real
+facilitator, and the settlement transaction is then read back off chain to
+confirm exactly one `Transfer` event.
+
 ### Tips (scene 5)
 `tip_provider` uses the same EIP-3009 + facilitator path, so a tip is
 gas-sponsored too. A tip always leaves a local trace: it attaches to an
@@ -251,7 +272,9 @@ Tips and commissions both resolve their destination in code:
 
 ### Hard caps (enforced in code, not in prompts)
 - **Per-job cap:** 0.05 USDC — `budgetGuard("commission", amount)` throws if exceeded.
-- **Weekly cap:** 1 USDC rolling 7 days — checked via `weekSpend()` from the ledger.
+- **Weekly cap:** 1 USDC rolling 7 days — checked via `weekSpend()`, which sums
+  ledger rows **and** payments that settled on chain but whose ledger row has
+  not been written yet, so a payment that just left the wallet still counts.
 - **Transfer caps:** `MAX_TRANSFER_USDC=100` per transfer, `MAX_DAILY_TRANSFER_USDC=500` per day.
 - **`KILL_SWITCH=1`** freezes commissions, tips, transfer-intent creation, and transfer execution immediately.
 
@@ -283,6 +306,7 @@ curl -i "http://localhost:3000/providers/rate-sunset?location=Lisbon&request=gol
 - ✅ Build passes: `npm run build`
 - ✅ The x402 flow is verified at the wire level (402 → sign → settle), with the provider balance delta asserted
 - ✅ Settlement amounts and hashes are recorded by the code that observed them
+- ✅ **One commission produces exactly one funded settlement** — the real `commission_job` tool is run against a live provider and facilitator, and the resulting transaction is read back off chain to confirm a single `Transfer` event of the negotiated amount
 - ✅ Tips are classified separately from commissions and cannot be claimed as income
 - ✅ A tip can never be paid to an unowned placeholder address
 - ✅ The agent wallet holds no ETH and still settles — gas is sponsored
