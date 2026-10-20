@@ -20,15 +20,21 @@ import {
   getWalletBalance,
   getUsdcBalance,
   getProviderWalletAddress,
+  loadAccountForTransfer,
   payAndFetch,
   USDC_ADDRESS,
   USDC_DECIMALS,
 } from "./wallet";
 import { createPublicClient, formatUnits } from "viem";
 import { baseSepolia } from "viem/chains";
-import { PROVIDERS } from "@/lib/providers";
+import { PROVIDERS, type ProviderSlug } from "@/lib/providers";
+import { resolvePayToStrict } from "@/lib/x402-seller";
 import { gaslessUsdcTransfer } from "@/lib/facilitator-retry";
-import { recordSettlement, takeUnloggedSettlement } from "./settlements";
+import {
+  recordSettlement,
+  takeUnloggedSettlement,
+  markSettlementLogged,
+} from "./settlements";
 import { callLLM, extractJson, withRetry } from "@/lib/llm";
 import {
   createPendingTransfer,
@@ -280,18 +286,27 @@ export async function logToLedger(
   });
 }
 
-/** Add a tip (and optionally its transfer txHash) to a provider's most recent PAID row. */
+/**
+ * Add a tip (and optionally its transfer txHash) to a provider's most recent
+ * PAID row.
+ *
+ * A tip can also stand on its own — the user may tip a provider for work
+ * that was never commissioned through x402. In that case there is no paid
+ * row to attach to, so a standalone row is created; otherwise the money
+ * would move on-chain with no trace of it in the ledger at all.
+ */
 export async function applyTip(
   provider: string,
   tipUsdc: number,
   tipTxHash?: string,
+  providerWallet?: string,
 ): Promise<LedgerEntry | null> {
   return serialized(() => {
     let entries: LedgerEntry[] = [];
     try {
       entries = JSON.parse(fs.readFileSync(LEDGER_PATH, "utf8"));
     } catch {
-      return null;
+      entries = [];
     }
     for (let i = entries.length - 1; i >= 0; i--) {
       const row = entries[i];
@@ -302,7 +317,20 @@ export async function applyTip(
         return row;
       }
     }
-    return null;
+    // No commission row to attach to — log the tip on its own row.
+    entries.push({
+      ts: new Date().toISOString(),
+      job: "tip (standalone)",
+      provider,
+      providerWallet: providerWallet ?? "",
+      deliverable: "",
+      score: 0,
+      feedback: "Standalone tip — no commissioned deliverable attached.",
+      tipUsdc,
+      ...(tipTxHash ? { tipTxHash } : {}),
+    });
+    fs.writeFileSync(LEDGER_PATH, JSON.stringify(entries, null, 2) + "\n");
+    return entries[entries.length - 1];
   });
 }
 
@@ -670,6 +698,7 @@ export const paidTools: Tool[] = [
               job,
               amountUsdc: counterOffer,
               txHash: tx,
+              kind: "commission",
             });
           }
           return {
@@ -704,6 +733,7 @@ export const paidTools: Tool[] = [
             job,
             amountUsdc: meta.ask,
             txHash: tx,
+            kind: "commission",
           });
         }
         return {
@@ -741,27 +771,25 @@ export const paidTools: Tool[] = [
       budgetGuard("tip", amountUsdc);
       if (amountUsdc <= 0) throw new Error("Tip must be positive.");
 
-      const envSink = process.env.PROVIDER_PAY_TO_OVERRIDE as
-        `0x${string}` | undefined;
-      const to = envSink ?? getProviderWalletAddress();
+      // Same precedence as the x402 seller: an explicit override wins, then
+      // the funded provider wallet. An EMPTY override
+      // (PROVIDER_PAY_TO_OVERRIDE=) must fall through to the wallet, so test
+      // for a usable address rather than for mere presence. Unlike the x402
+      // seller there is NO fallback to the registry placeholder: those
+      // addresses are unowned, and a tip is the agent's own money.
+      if (!PROVIDER_PATHS[provider])
+        throw new Error(
+          `Unknown provider ${provider}. Valid: soleil, feathers, capn`,
+        );
+      const to = resolvePayToStrict(provider as ProviderSlug);
       if (!to)
         throw new Error(
           "No provider wallet to tip. PROVIDER_PAY_TO_OVERRIDE or createProviderWallet() first.",
         );
 
-      const { privateKeyToAccount } = await import("viem/accounts");
-      const key = process.env.WALLET_PRIVATE_KEY
-        ? (process.env.WALLET_PRIVATE_KEY.trim() as `0x${string}`)
-        : ((
-            JSON.parse(
-              fs.readFileSync(
-                path.join(process.cwd(), ".agent-wallet.json"),
-                "utf8",
-              ),
-            ) as { privateKey: `0x${string}` }
-          ).privateKey.trim() as `0x${string}`);
-      // Never log the key — it is only used to sign locally.
-      const account = privateKeyToAccount(key);
+      // Sign with the same key the x402 buyer uses. Never logged — it is only
+      // used to sign locally.
+      const account = loadAccountForTransfer();
 
       // Gasless: the agent signs an EIP-3009 authorization OFF-CHAIN and the
       // x402 facilitator broadcasts it while paying the gas. The agent wallet
@@ -780,7 +808,20 @@ export const paidTools: Tool[] = [
       }
       const tx = result.txHash;
 
-      const row = await applyTip(provider, amountUsdc, tx);
+      // Record the settlement so the ledger row can carry the amount that
+      // actually moved, not whatever the model claims.
+      await recordSettlement({
+        provider,
+        job: "tip (standalone)",
+        amountUsdc: amountUsdc,
+        txHash: tx,
+        kind: "tip",
+      });
+
+      const row = await applyTip(provider, amountUsdc, tx, to);
+      // The tip wrote its own ledger row, so the settlement is already
+      // accounted for — mark it so a later judge_deliverable cannot claim it.
+      await markSettlementLogged(tx);
       return {
         provider,
         tipped: amountUsdc,

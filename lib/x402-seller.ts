@@ -38,6 +38,24 @@ export function resolvePayTo(slug: ProviderSlug): `0x${string}` {
   return providerBySlug(slug).payTo;
 }
 
+/**
+ * Where a provider's USDC must ACTUALLY land, or null if there is nowhere
+ * safe to send it.
+ *
+ * Unlike resolvePayTo, this never falls back to the registry placeholder
+ * addresses (0x...01/02/03), which nobody controls — paying one would burn
+ * the money with no recipient able to ever spend it. Use this when the
+ * payment is a one-way spend of the agent's own funds (tips), where burning
+ * it is worse than refusing.
+ */
+export function resolvePayToStrict(
+  slug: ProviderSlug,
+): `0x${string}` | null {
+  const override = process.env.PROVIDER_PAY_TO_OVERRIDE;
+  if (override && override.startsWith("0x")) return override as `0x${string}`;
+  return getProviderWalletAddress();
+}
+
 export type GuardResult =
   | { kind: "requirements"; response: Response }
   | {
