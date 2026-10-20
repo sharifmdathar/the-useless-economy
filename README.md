@@ -121,18 +121,19 @@ USDC transfers, provider settlement, and tips all go through the x402 facilitato
 
 ## Demo Videos
 
-Every demo below is a real recording of this app — real prompts, real tool calls, real on-chain transactions on Base Sepolia.
+Every demo below is a real recording of this app — real prompts, real tool calls, real on-chain transactions on Base Sepolia. The Week 1 and Week 2 videos are narrated; the Week 3 recording is the original silent screen capture.
 
 | Week | Demo |
 |---|---|
-| Week 1 (the-useless-economy.v1) | https://github.com/sharifmdathar/the-useless-economy/releases — setup, first gig run, first judge score. |
-| Week 2 (the-useless-economy.v2) | https://github.com/sharifmdathar/the-useless-economy/releases — natural-language transfer → review card → approval → on-chain settlement. |
-| Week 3 (the-useless-economy.v3) | https://github.com/sharifmdathar/the-useless-economy/releases — full x402 payment cycle, leaderboard, and roadmap. |
+| Week 1 (the-useless-economy.v1) | [demo-week1-gig-economy.mp4](https://raw.githubusercontent.com/sharifmdathar/the-useless-economy/main/docs/demo-week1-gig-economy.mp4) — narrated (2:07). One job dispatched to all three providers, judged, ranked, winner announced, and the raw tool call opened up. |
+| Week 2 (the-useless-economy.v2) | [demo-week2-transfers.mp4](https://raw.githubusercontent.com/sharifmdathar/the-useless-economy/main/docs/demo-week2-transfers.mp4) — narrated (2:42). Natural-language transfer → review card → approval → on-chain settlement, the browser-wallet path, and a cap rejection. |
+| Week 3 (the-useless-economy.v3) | [screenrecording-2026-10-16_23-56-10.mp4](https://raw.githubusercontent.com/sharifmdathar/the-useless-economy/main/docs/screenrecording-2026-10-16_23-56-10.mp4) — original screen capture (1:07, silent). Wallet creation, x402 payment, and on-chain USDC tips. |
 
 Raw files live in `docs/`:
-- `docs/screenrecording-2026-10-16_23-56-10.mp4` — Week 1 walkthrough (67s, silent).
+- `docs/demo-week1-gig-economy.mp4` — Week 1 narrated demo: the gig economy end to end.
 - `docs/demo-week2-transfers.mp4` — Week 2 narrated demo: the full transfer lifecycle, the browser-wallet path, and a cap rejection.
-- `docs/DEMO_VIDEO_GUIDE.md` — the Week 2 shot list and narration script the demo was cut from.
+- `docs/screenrecording-2026-10-16_23-56-10.mp4` — Week 3 wallet demo (67s, silent).
+- `docs/DEMO_VIDEO_GUIDE.md` — the shot lists and narration scripts the demos were cut from.
 - `docs/TWITTER_POSTS.md` — the three-per-week posting plan, each tagging `@riseinweb3`.
 
 ## Future Scope
@@ -147,7 +148,7 @@ Raw files live in `docs/`:
 
 ## Social Media
 - **Twitter/X** – [@riseinweb3](https://x.com/riseinweb3) (tagged in all posts).
-- **Product page** – [@theuselesseconomy](https://x.com/theuselesseconomy) — dedicated account for this product; pinned post summarises the stack.
+- **Product page** – [@UselessEconomy](https://x.com/UselessEconomy) — dedicated account for this product; pinned post summarises the stack.
 - **Discord** – community discussion channel for developers and users.
 - **GitHub** – source code and demo artifacts: https://github.com/sharifmdathar/the-useless-economy
 

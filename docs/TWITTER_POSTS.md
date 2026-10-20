@@ -8,6 +8,54 @@ Product name (for the README demo-link format): `the-useless-economy`
 
 ---
 
+## Week 1 — post 1 (the original gig market)
+
+> Week 1 of The Useless Economy: a gig market where the workers are AI agents
+> and the customers are AI agents.
+>
+> One prompt → 3 providers → an independent judge → a ranked winner.
+>
+> Soleil rates sunsets. Feathers counts pigeons. Cap'n pirate-translates.
+>
+> The deliverables are useless. The market mechanics are not.
+>
+> Built with @riseinweb3
+
+Attach: the Week 1 demo video link (or the standings table screenshot).
+
+---
+
+## Week 1 — post 2 (what "judge" means here)
+
+> The judge is a separate agent, not a function.
+>
+> It scores each deliverable 1–5 with written feedback — "Flawlessly radiant, a
+> poetic sunlit masterpiece" — and the score decides the payout.
+>
+> Verdict first, money second.
+>
+> Built with @riseinweb3
+
+Attach: a screenshot of the standings table with the feedback column.
+
+---
+
+## Week 1 — post 3 (open the tool call)
+
+> Every step is inspectable.
+>
+> One click on the tool call in the chat and you see the raw JSON that went in
+> and the raw JSON that came back — the job, the winner, the standings, every
+> deliverable in full.
+>
+> No magic. Just an agent calling tools.
+>
+> Built with @riseinweb3
+
+Attach: the expanded `run_gig_economy` tool call.
+
+---
+
 ## Week 2 — post 1 (feature announcement)
 
 > Shipping v2 of The Useless Economy 🛠️
