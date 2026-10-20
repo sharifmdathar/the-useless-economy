@@ -121,18 +121,18 @@ USDC transfers, provider settlement, and tips all go through the x402 facilitato
 
 ## Demo Videos
 
-Every demo below is a real recording of this app — real prompts, real tool calls, real on-chain transactions on Base Sepolia. The Week 1 and Week 2 videos are narrated; the Week 3 recording is the original silent screen capture.
+Every demo below is a real recording of this app — real prompts, real tool calls, real on-chain transactions on Base Sepolia. All three are narrated.
 
 | Week | Demo |
 |---|---|
 | Week 1 (the-useless-economy.v1) | [demo-week1-gig-economy.mp4](https://raw.githubusercontent.com/sharifmdathar/the-useless-economy/main/docs/demo-week1-gig-economy.mp4) — narrated (2:07). One job dispatched to all three providers, judged, ranked, winner announced, and the raw tool call opened up. |
 | Week 2 (the-useless-economy.v2) | [demo-week2-transfers.mp4](https://raw.githubusercontent.com/sharifmdathar/the-useless-economy/main/docs/demo-week2-transfers.mp4) — narrated (2:42). Natural-language transfer → review card → approval → on-chain settlement, the browser-wallet path, and a cap rejection. |
-| Week 3 (the-useless-economy.v3) | [screenrecording-2026-10-16_23-56-10.mp4](https://raw.githubusercontent.com/sharifmdathar/the-useless-economy/main/docs/screenrecording-2026-10-16_23-56-10.mp4) — original screen capture (1:07, silent). Wallet creation, x402 payment, and on-chain USDC tips. |
+| Week 3 (the-useless-economy.v3) | [demo-week3-wallet.mp4](https://raw.githubusercontent.com/sharifmdathar/the-useless-economy/main/docs/demo-week3-wallet.mp4) — narrated (2:13). The agent's own wallet, the x402 payment challenge, a real commission settled on-chain, a tip, and the balance moving. |
 
 Raw files live in `docs/`:
 - `docs/demo-week1-gig-economy.mp4` — Week 1 narrated demo: the gig economy end to end.
 - `docs/demo-week2-transfers.mp4` — Week 2 narrated demo: the full transfer lifecycle, the browser-wallet path, and a cap rejection.
-- `docs/screenrecording-2026-10-16_23-56-10.mp4` — Week 3 wallet demo (67s, silent).
+- `docs/demo-week3-wallet.mp4` — Week 3 narrated demo: the agent's wallet, the x402 challenge, a settled commission, a tip, and the balance after.
 - `docs/DEMO_VIDEO_GUIDE.md` — the shot lists and narration scripts the demos were cut from.
 - `docs/TWITTER_POSTS.md` — the three-per-week posting plan, each tagging `@riseinweb3`.
 

@@ -138,122 +138,152 @@ scene 8, which stands in for MetaMask and never holds a key.
 
 # Week 3 Demo Video Guide: "Give It A Wallet"
 
-**Video:** `docs/screenrecording-2026-10-16_23-56-10.mp4`
+**Video:** `docs/demo-week3-wallet.mp4` — narrated, 1920×1080, H.264 + AAC.
 
 ## Overview
-This demo video showcases The Useless Economy agent's first crypto capability: a Base Sepolia testnet wallet with x402 payment functionality and on-chain USDC tips.
+The agent's own crypto wallet, and the first thing it does with it: pay for
+work. The video follows one real commission and one real tip, both settled
+on Base Sepolia through the x402 facilitator, and shows the balance move.
 
-## What You Will See in the Video
+Every frame is a genuine capture of the running app. The transaction hashes
+in the video are real Base Sepolia transactions.
 
-### 1. Wallet Creation (0:00 - 0:30)
-- User clicks "Create wallet" in the UI
-- Agent wallet address displayed: `0xef3E983B014148c76bF0Caa64547826220543433`
-- Provider wallet address displayed: `0xc71DAa8fD15B713Fe27406e25bB9AdfA1fea5025`
-- Both wallets funded via faucets (faucets.chain.link + circle.com)
+## Scenes
 
-### 2. Wallet Balance Check (0:30 - 1:00)
-- User navigates to `/api/wallet` endpoint
-- Displays agent ETH balance (e.g., "0.0523 ETH")
-- Displays agent USDC balance (e.g., "20.000000 USDC")
-- Shows network: "Base Sepolia (testnet)"
+| # | Scene | What is on screen |
+|---|---|---|
+| 1 | `01_wallet` | The agent's wallet panel — address, ETH balance, USDC balance. |
+| 2 | `02_x402_challenge` | The raw HTTP 402 from the provider route. |
+| 3 | `03_prompt` | The commission request being typed into the chat. |
+| 4 | `04_settlement` | The expanded settlement tool call — the request, the payment, and the transaction hash. |
+| 5 | `05_tip` | The expanded `tip_provider` call, with its transaction hash. |
+| 6 | `06_wallet_after` | The wallet panel again, with the reduced balance. |
+| 7 | `07_close` | The tip's output block, hash in view. |
 
-### 3. Commission a Job via x402 (1:00 - 2:00)
-- User selects a provider (Soleil, Feathers, or Cap'n)
-- User enters a job: "rate the sunset over the Tagus in Lisbon"
-- Agent calls `commission_job` tool
-- **Flow shown:**
-  - Provider returns `402 Payment Required` with x402 requirements
-  - Agent signs EIP-3009 `transferWithAuthorization` typed-data
-  - Agent retries with `X-PAYMENT` header
-  - Provider verifies signature locally (viem `verifyTypedData`)
-  - Provider enforces persona floor price in code
-  - Provider settles on-chain via `USDC.transferWithAuthorization`
-  - Settlement tx hash recorded in `ledger.json`
-- Result: Job completed, provider paid 0.05 USDC, tx hash shown
+## The transcript
 
-### 4. Tip a Provider (2:00 - 2:30)
-- User tips a provider using `tip_provider` tool
-- Parameters: provider name (e.g., "capn") and amount (e.g., "0.005")
-- **Flow shown:**
-  - Budget guard checks: positive amount, under per-job cap
-  - Agent wallet USDC balance deducted
-  - On-chain USDC transfer executed via `USDC.transfer`
-  - Tx hash returned and ledger row updated
-- Result: Provider receives tip, balance increases, ledger updated
+> Week three. The agent gets its own crypto wallet, and it pays for its own
+> work. This is the agent's address on Base Sepolia testnet, and the balance
+> it spends from — real USDC, held in the agent's own key file, not a
+> custodial account.
+>
+> The providers are x402 sellers. Ask one for a quote without paying, and it
+> answers with a payment required challenge: the price, the USDC contract, the
+> address that must be paid, and the facilitator that will settle it.
+>
+> You ask the agent to commission a provider. One line, and the agent goes out
+> and buys the work.
+>
+> Here is the settlement, opened up. The agent requests the quote, gets the
+> payment challenge back, signs an EIP-3009 authorisation with its own key,
+> and hands it to the facilitator — which broadcasts it and pays the gas. The
+> result is a real transaction hash, on chain, that anyone can verify.
+>
+> And because the work is good, the agent tips the provider — again, signed
+> locally, again settled on chain, again with a transaction hash attached.
+> The tip is recorded in the ledger against the provider, and the settlement is
+> tracked separately, so a tip can never be mistaken for the price of the
+> work.
+>
+> And the balance moves. Same wallet, same address, less USDC — every payment
+> and every tip leaves the agent's own balance, verifiable on the explorer by
+> anyone who opens the link.
+>
+> That is week three of The Useless Economy. An agent that carries its own
+> money, pays for its own work, and leaves a receipt for every cent. The
+> Useless Economy.
 
-### 5. Provider Balances (2:30 - 3:00)
-- User checks `get_provider_balances` 
-- Shows provider USDC balance increased (reflects the tip + settlement)
-- Confirms on-chain payments arrived at the provider settlement wallet
+## Key technical details viewers should notice
 
-### 6. Hard Caps Demonstration (3:00 - 3:30)
-- User attempts to commission a job with counter-offer above 0.05 USDC cap
-- System rejects: "X exceeds the 0.05 per-job cap. Job refused."
-- User attempts weekly cap breach
-- System rejects: "Weekly budget of 1 USDC would be breached"
+### The x402 challenge (scene 2)
+The provider route answers `402 Payment Required` with the payment
+requirements:
 
-### 7. KILL_SWITCH (3:30 - end)
-- User sets `KILL_SWITCH=1` in .env
-- All commission/tip operations freeze
-- Error message: "KILL_SWITCH is set — the economy is frozen. No payments this run."
-- User resets to `KILL_SWITCH=0` and operations resume
+```json
+{
+  "error": "Payment Required",
+  "scheme": "eip3009",
+  "price": "0.05",
+  "asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+  "payTo": "0xc71DAa8fD15B713Fe27406e25bB9AdfA1fea5025",
+  "facilitator": "https://x402.org/facilitator",
+  "resource": "/providers/rate-sunset"
+}
+```
 
-## Key Technical Details Viewers Should Notice
+The frame in the video is the browser's own rendering of that response,
+captured from the running server.
 
-### x402 Payment Flow (EIP-3009)
-1. **402 Response:** Provider returns `{error: "Payment Required", scheme: "eip3009", price, asset: USDC, payTo, facilitator}`
-2. **Signing:** Agent signs typed-data with its wallet key (viem `signTypedData`)
-3. **Authorization Header:** `X-PAYMENT: <base64 JSON with scheme, payment, signature, asset, resource>`
-4. **Verification:** Provider verifies via `verifyTypedData` (local, no on-chain tx yet)
-5. **Floor Check:** Provider enforces persona floor (e.g., Soleil: 0.03 USDC minimum)
-6. **Settlement:** `USDC.transferWithAuthorization` on-chain — produces real tx hash
-7. **Ledger:** `{txHash, paidAmount, tipUsdc?, tipTxHash?}` appended to `ledger.json`
+### The settlement path (scene 4)
+1. **Request** — the agent asks the provider for the work and gets the 402.
+2. **Sign** — the agent signs an EIP-3009 `transferWithAuthorization`
+   authorisation with its own key, against the USDC domain (`name: "USDC"`,
+   `version: "2"`, chain `84532`).
+3. **Sponsor** — the authorisation is handed to the x402 facilitator, which
+   broadcasts it and pays the gas. This is what makes it work: the agent
+   wallet holds USDC but **zero ETH**, so a direct `USDC.transfer` could never
+   succeed.
+4. **Receipt** — the facilitator returns the transaction hash, which is
+   recorded in `settlements.json` and appended to the ledger.
 
-### On-Chain USDC Tips
-- `tip_provider` uses `USDC.transfer` (standard ERC-20 transfer)
-- 6 decimals on Base Sepolia (1 USDC = 1,000,000 units)
-- Tx hash recorded in ledger row's `tipTxHash` field
-- Provider address: `0xc71DAa8fD15B713Fe27406e25bB9AdfA1fea5025`
+The recorded amount and hash come from the code that observed the settlement,
+not from what the model says happened.
 
-### Hard Caps (enforced in code, not prompts)
-- **Per-job cap:** 0.05 USDC — `budgetGuard("commission", amount)` throws if exceeded
-- **Weekly cap:** 1 USDC rolling 7 days — checked via `weekSpend()` from ledger.json
-- **KILL_SWITCH:** `KILL_SWITCH=1` freezes all commission + tip operations immediately
+### Tips (scene 5)
+`tip_provider` uses the same EIP-3009 + facilitator path, so a tip is
+gas-sponsored too. A tip always leaves a local trace: it attaches to an
+existing paid ledger row when there is one, and otherwise creates a standalone
+row. Tip settlements are tagged `kind: "tip"`, and `takeUnloggedSettlement()`
+only ever claims *commission* settlements — so a tip can never later be
+reported as the price of commissioned work.
 
-### Wallet Addresses
+### Payout resolution
+Tips and commissions both resolve their destination in code:
+- a valid `PROVIDER_PAY_TO_OVERRIDE`, if set;
+- otherwise the funded provider wallet;
+- for a one-way tip, if neither is available the tip is **refused** — it never
+  falls back to an unowned registry placeholder address.
+
+### Addresses shown in the video
 - **Agent:** `0xef3E983B014148c76bF0Caa64547826220543433` (from `.agent-wallet.json`)
 - **Provider:** `0xc71DAa8fD15B713Fe27406e25bB9AdfA1fea5025` (from `.provider-wallet.json`)
-- **USDC Contract (Base Sepolia):** `0x036CbD53842c5426634e7929541eC2318f3dCF7e`
+- **USDC (Base Sepolia):** `0x036CbD53842c5426634e7929541eC2318f3dCF7e`
 
-## How to Reproduce the Demo
+### Hard caps (enforced in code, not in prompts)
+- **Per-job cap:** 0.05 USDC — `budgetGuard("commission", amount)` throws if exceeded.
+- **Weekly cap:** 1 USDC rolling 7 days — checked via `weekSpend()` from the ledger.
+- **Transfer caps:** `MAX_TRANSFER_USDC=100` per transfer, `MAX_DAILY_TRANSFER_USDC=500` per day.
+- **`KILL_SWITCH=1`** freezes commissions, tips, transfer-intent creation, and transfer execution immediately.
+
+## How to reproduce the demo
 
 ```bash
 # 1. Start the app
 npm run dev
 
-# 2. View wallet
-open http://localhost:3000/api/wallet
+# 2. View the wallet
+curl http://localhost:3000/api/wallet
 
-# 3. Commission a job
-#    - Select provider → enter job → tool: commission_job
-#    - Watch: 402 → sign EIP-3009 → X-PAYMENT → settle → ledger update
+# 3. See the x402 challenge
+curl -i "http://localhost:3000/providers/rate-sunset?location=Lisbon&request=golden+sunset+over+the+Tagus"
+# → HTTP 402 with the payment requirements
 
-# 4. Tip a provider
-#    - Tool: tip_provider "soleil" 0.005
-#    - Watch: USDC transfer → tx hash → ledger update
+# 4. Commission a job
+#    - Ask the agent to hire a provider for a job
+#    - Watch: 402 → sign EIP-3009 → facilitator → settle → ledger update
 
-# 5. Check balances
-#    - GET /api/wallet
-#    - get_provider_balances
+# 5. Tip a provider
+#    - Ask the agent to tip a provider
+#    - Watch: EIP-3009 → facilitator → settle → ledger row
 ```
 
-## What Proves the Functionality Works
+## What proves the functionality works
 
 - ✅ Typecheck passes: `npx tsc --noEmit`
 - ✅ Build passes: `npm run build`
-- ✅ Wallet addresses derived from private keys
-- ✅ x402 flow verified at wire level (402 → sign → settle)
-- ✅ Hard caps enforced in code (not just prompts)
-- ✅ KILL_SWITCH freezes payments
-- ✅ Ledger records all on-chain transactions
-- ✅ Provider balance changes visible on-chain
+- ✅ The x402 flow is verified at the wire level (402 → sign → settle), with the provider balance delta asserted
+- ✅ Settlement amounts and hashes are recorded by the code that observed them
+- ✅ Tips are classified separately from commissions and cannot be claimed as income
+- ✅ A tip can never be paid to an unowned placeholder address
+- ✅ The agent wallet holds no ETH and still settles — gas is sponsored
+- ✅ Hard caps and `KILL_SWITCH` are enforced in code

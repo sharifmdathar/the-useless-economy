@@ -52,7 +52,7 @@ type Status = {
   model: string;
   tools: { name: string; description: string }[];
 };
-type WalletInfo = { address: string | null; balance?: string };
+type WalletInfo = { address: string | null; balance?: string; usdc?: string };
 
 const EXAMPLES = [
   "Send 1 USDC to 0x000000000000000000000000000000000000dEaD",
@@ -122,7 +122,19 @@ export default function Home() {
               standings: data.standings,
             },
       ]);
-      if (data.steps?.some((s: Step) => s.result?.payment)) loadWallet();
+      // Refresh the balance whenever the run may have moved money. The
+      // shapes differ per tool: a commission returns `tx`, a tip returns
+      // `tipTxHash`, an x402 purchase returns `payment`. Check for all of
+      // them — otherwise the panel keeps showing a stale balance after a
+      // payment that really settled.
+      const movedMoney = data.steps?.some(
+        (s: Step) =>
+          s.result?.payment ||
+          s.result?.tx ||
+          s.result?.tipTxHash ||
+          s.result?.settledTx,
+      );
+      if (movedMoney) loadWallet();
       // A prepared transfer is not money moved yet — nothing to refresh.
       if (data.transfers?.length) loadWallet();
     } catch {
@@ -524,18 +536,27 @@ function WalletDetails({
           {copied ? <Check /> : <Copy />}
         </Button>
       </div>
-      <div className="flex items-center justify-between font-mono text-xs text-muted-foreground uppercase">
-        <span>
-          Balance <span className="text-foreground">{wallet.balance}</span>
-        </span>
-        <Button
-          variant="ghost"
-          size="icon-xs"
-          onClick={onRefresh}
-          aria-label="Refresh balance"
-        >
-          <RefreshCw />
-        </Button>
+      <div className="flex flex-col gap-2 border-t pt-3 font-mono text-xs uppercase">
+        <div className="flex items-center justify-between text-muted-foreground">
+          <span>
+            Balance <span className="text-foreground">{wallet.balance}</span>
+          </span>
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            onClick={onRefresh}
+            aria-label="Refresh balance"
+          >
+            <RefreshCw />
+          </Button>
+        </div>
+        {wallet.usdc && (
+          <div className="flex items-center justify-between text-muted-foreground">
+            <span>
+              USDC <span className="text-foreground">{wallet.usdc}</span>
+            </span>
+          </div>
+        )}
       </div>
       <div className="flex flex-wrap gap-x-4 gap-y-1 border-t pt-3 font-mono text-xs uppercase">
         <a

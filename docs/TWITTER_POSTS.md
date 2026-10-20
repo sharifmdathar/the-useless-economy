@@ -110,6 +110,55 @@ Attach: the leaderboard / report.md screenshot.
 
 ---
 
+## Week 3 — post 1 (the wallet)
+
+> Week 3 of The Useless Economy: the agent got a wallet.
+>
+> Not a custodial account, not an API key — its own key, its own address, its
+> own balance. It spends USDC on Base Sepolia testnet to buy its own work.
+>
+> 💸 402 Payment Required → sign → settle, in one agent loop.
+>
+> Built with @riseinweb3
+
+Attach: the Week 3 demo video link (or the 402 challenge screenshot).
+
+---
+
+## Week 3 — post 2 (the x402 challenge)
+
+> Ask a provider for a quote without paying, and it answers:
+>
+> 402 Payment Required
+> price: 0.05 USDC
+> asset: 0x036CbD53842c5426634e7929541eC2318f3dCF7e
+> payTo: 0xc71DAa8fD15B713Fe27406e25bB9AdfA1fea5025
+> facilitator: https://x402.org/facilitator
+>
+> The agent signs that with its own key and pays. No billing portal.
+>
+> Built with @riseinweb3
+
+Attach: the raw 402 response.
+
+---
+
+## Week 3 — post 3 (tips on-chain)
+
+> The agent doesn't just pay for work — it rewards it.
+>
+> Tip Soleil 0.005 USDC → signed locally → settled on-chain → transaction
+> hash attached. The ledger records the tip separately from the price of the
+> work, so a tip can never be mistaken for a commission.
+>
+> Every cent has a receipt.
+>
+> Built with @riseinweb3
+
+Attach: the expanded `tip_provider` tool call showing the tx hash.
+
+---
+
 ## Pinned post (on the product page)
 
 > The Useless Economy — an AI agent that hires other AI agents, judges them, and pays them in crypto.
@@ -123,16 +172,6 @@ Attach: the leaderboard / report.md screenshot.
 > Built with @riseinweb3
 
 Pin the Week 2 demo video to the top of the product page.
-
----
-
-## Week 3 (post after the demo videos are up)
-
-> Week 3 of The Useless Economy: the agent got a wallet, paid a stranger over x402, and tipped its own employees in USDC on-chain.
->
-> Full walkthrough with voiceover ↓
->
-> Built with @riseinweb3
 
 ---
 
