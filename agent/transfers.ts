@@ -45,6 +45,17 @@ export const MAX_DAILY_TRANSFER = Number(
   process.env.MAX_DAILY_TRANSFER_USDC ?? 500,
 );
 
+/**
+ * How long a browser-wallet signing claim stays live.
+ *
+ * The claim is what lets the browser path behave like the agent path:
+ * the caps are checked before the money moves, and one logical transfer
+ * cannot be signed twice. If the user abandons the extension's dialog,
+ * the claim has to expire eventually, or the transfer could never be
+ * approved again.
+ */
+const CLAIM_TTL_MS = 10 * 60 * 1000;
+
 export type TransferSource = "agent_wallet" | "user_wallet";
 
 export type TransferStatus =
@@ -71,6 +82,14 @@ export type PendingTransfer = {
   reason?: string;
   /** True when the amount was paid in the native asset. */
   isNative: boolean;
+  /**
+   * When a browser-wallet transfer was claimed for signing.
+   *
+   * A claim is the server's permission slip: it re-checks the transfer
+   * caps at approval time and it makes the row un-claimable by anyone
+   * else for a while, so one logical transfer can only be signed once.
+   */
+  claimedAt?: string;
 };
 
 let queue: Promise<unknown> = Promise.resolve();
@@ -358,6 +377,13 @@ export async function executeAgentTransfer(
  * Record a transfer that the USER's own connected wallet broadcast. The
  * browser signs; the server only records the resulting hash so the ledger
  * and the UI agree on what happened.
+ *
+ * This is the SECOND half of the browser-wallet path. The first half is
+ * claimTransferForSigning(), which re-checks the caps and hands out a
+ * one-shot permission slip BEFORE the browser is allowed to sign. By the
+ * time this runs, the money has already moved, so this function's job is
+ * only to record it — but it must still refuse to double-count a transfer
+ * that was already recorded.
  */
 export async function recordUserTransfer(
   id: string,
@@ -368,7 +394,149 @@ export async function recordUserTransfer(
   if (row.status !== "pending" && row.status !== "approved") {
     throw new Error(`Transfer ${id} is ${row.status}, not pending.`);
   }
+  // A hash may only be recorded against a transfer that was CLAIMED for
+  // signing. The claim is what re-checked the caps immediately before the
+  // money moved, so recording an unclaimed transfer would let a hash
+  // appear in the ledger for a transfer that never passed the cap check.
+  if (!row.claimedAt) {
+    throw new Error(
+      `Transfer ${id} was never claimed for signing, so the caps were never re-checked before it moved. Nothing was recorded.`,
+    );
+  }
   return await markExecuted(id, txHash);
+}
+
+/**
+ * CLAIM a browser-wallet transfer for signing.
+ *
+ * This is the browser path's equivalent of the agent path's approval-time
+ * cap re-check, and it is what stops one logical transfer from being paid
+ * twice.
+ *
+ * The problem this solves: the browser wallet signs and broadcasts on the
+ * CLIENT. The server only learns about the transaction afterwards, when the
+ * client reports the hash. Without a server-side claim:
+ *
+ *   - the caps were only ever checked when the intent was filed, so a cap
+ *     that is crossed between filing and approval was walked straight
+ *     through (the agent path already refuses this in
+ *     executeAgentTransfer());
+ *   - a double-click, a retried request, or a second browser tab could
+ *     broadcast the SAME transfer twice, and the server would happily
+ *     record the second hash over the first.
+ *
+ * The claim does three things, in order, before the browser is allowed to
+ * sign:
+ *
+ *   1. Refuses if the transfer is not pending, or if another claim is
+ *      still live — so only one signing attempt can be in flight.
+ *   2. Re-checks the per-transfer and rolling-24h caps against the CURRENT
+ *      committed spend, so the caps hold at the moment the money moves and
+ *      not merely when the intent was filed.
+ *   3. Stamps the row so the claim cannot be re-issued.
+ *
+ * The claim expires after CLAIM_TTL_MS so a user who dismisses the
+ * extension's dialog can try again rather than being locked out.
+ */
+export async function claimTransferForSigning(
+  id: string,
+): Promise<PendingTransfer> {
+  // The kill switch must cover the browser path too. A transfer created
+  // before the switch was flipped must not still settle just because the
+  // user happens to have their own wallet connected.
+  if (process.env.KILL_SWITCH === "1") {
+    throw new Error(
+      "KILL_SWITCH is set — the economy is frozen. This transfer was not sent.",
+    );
+  }
+
+  const token = resolveTokenForRow(id);
+
+  return await serialized(() => {
+    const rows = readAll();
+    const row = rows.find((t) => t.id === id);
+    if (!row) throw new Error(`No transfer with id ${id}.`);
+
+    if (row.status === "executed") {
+      throw new Error(
+        `Transfer ${id} was already executed${row.txHash ? ` (tx ${row.txHash})` : ""}. Nothing was sent again.`,
+      );
+    }
+    if (row.status !== "pending" && row.status !== "approved") {
+      throw new Error(`Transfer ${id} is ${row.status}, not pending.`);
+    }
+
+    // A live claim blocks a second signing attempt. An expired one does
+    // not, so an abandoned dialog does not lock the user out.
+    if (row.claimedAt) {
+      const age = Date.now() - new Date(row.claimedAt).getTime();
+      if (age < CLAIM_TTL_MS && age >= 0) {
+        throw new Error(
+          `Transfer ${id} is already being signed in your wallet. Wait for that to finish, or cancel the transfer. Nothing was sent twice.`,
+        );
+      }
+    }
+
+    // Re-check the caps HERE, at the moment the money is about to move.
+    // The agent path does the same in executeAgentTransfer(); without this
+    // the browser path could walk straight through a cap that was crossed
+    // between filing the intent and clicking approve.
+    const numeric = Number(row.amount);
+    if (numeric > MAX_TRANSFER) {
+      throw new Error(
+        `${row.amount} ${token.symbol} exceeds the ${MAX_TRANSFER} ${token.symbol} per-transfer cap. Nothing was sent.`,
+      );
+    }
+    const committed = dailySpend(token.symbol, row.id);
+    if (committed + numeric > MAX_DAILY_TRANSFER) {
+      throw new Error(
+        `Daily transfer cap of ${MAX_DAILY_TRANSFER} ${token.symbol} would be breached (already committed ${committed.toFixed(6)} + ${row.amount}). Nothing was sent.`,
+      );
+    }
+
+    row.claimedAt = new Date().toISOString();
+    writeAll(rows);
+    return row;
+  });
+}
+
+/** Resolve a stored transfer's token definition, with a clear error. */
+function resolveTokenForRow(id: string): TokenDef {
+  const row = getTransfer(id);
+  if (!row) throw new Error(`No transfer with id ${id}.`);
+  const token = resolveToken(row.token);
+  if (!token) throw new Error(`Unsupported token ${row.token}.`);
+  return token;
+}
+
+/**
+ * RELEASE a claim that was taken but never used.
+ *
+ * The browser claims before it opens the extension's dialog, so a claim
+ * can end up unused: the user dismisses the popup, or the extension
+ * refuses the chain switch, or the broadcast itself fails. Without a
+ * release the user would be locked out of that transfer until the claim
+ * expired.
+ *
+ * A release is only allowed while the transfer is still un-executed, so
+ * it can never undo a settled transfer.
+ */
+export async function releaseTransferClaim(
+  id: string,
+): Promise<PendingTransfer> {
+  return await serialized(() => {
+    const rows = readAll();
+    const row = rows.find((t) => t.id === id);
+    if (!row) throw new Error(`No transfer with id ${id}.`);
+    if (row.status === "executed") {
+      throw new Error(
+        `Transfer ${id} was already executed${row.txHash ? ` (tx ${row.txHash})` : ""}. Nothing was sent again.`,
+      );
+    }
+    delete row.claimedAt;
+    writeAll(rows);
+    return row;
+  });
 }
 
 /** The agent's USDC balance, for the review card. */

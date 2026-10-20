@@ -3,17 +3,26 @@ import {
   getTransfer,
   rejectTransfer,
   recordUserTransfer,
+  claimTransferForSigning,
+  releaseTransferClaim,
   type TransferStatus,
 } from "@/agent/transfers";
 
 /**
  * GET /api/transfers -> every transfer (optionally filtered by status)
- * POST /api/transfers { action, transferId, txHash? } -> approve or reject
+ * POST /api/transfers { action, transferId, txHash? } -> claim, approve or reject
  *
- * The APPROVE path here only RECORDS a transaction hash for transfers the
- * user's own connected wallet signed in the browser. Server-side signing
- * lives in the agent's approve_transfer tool, which requires the user to
- * have confirmed in the chat first.
+ * The browser-wallet path is a two-step exchange with the server:
+ *
+ *   1. action="claim" — the browser asks permission to sign. The server
+ *      re-checks the transfer caps against the CURRENT committed spend and
+ *      hands out a one-shot claim, so the caps hold at the moment the money
+ *      moves and one transfer cannot be signed twice.
+ *   2. action="approve" — the browser reports the hash it broadcast, and
+ *      the server records it.
+ *
+ * The agent-wallet path does not come here: the server signs it, and
+ * /api/transfers/approve owns that path.
  */
 export async function GET(req: Request) {
   const status = new URL(req.url).searchParams.get("status") as
@@ -54,6 +63,48 @@ export async function POST(req: Request) {
       return Response.json({ transfer: row });
     }
 
+    if (action === "claim") {
+      const existing = getTransfer(transferId);
+      if (!existing) {
+        return Response.json(
+          { error: `No transfer with id ${transferId}.` },
+          { status: 404 },
+        );
+      }
+      if (existing.source !== "user_wallet") {
+        return Response.json(
+          {
+            error:
+              "Only transfers funded by the user's own wallet are claimed here. Agent-wallet transfers are signed by the server.",
+          },
+          { status: 400 },
+        );
+      }
+      const row = await claimTransferForSigning(transferId);
+      return Response.json({ transfer: row });
+    }
+
+    if (action === "release") {
+      const existing = getTransfer(transferId);
+      if (!existing) {
+        return Response.json(
+          { error: `No transfer with id ${transferId}.` },
+          { status: 404 },
+        );
+      }
+      if (existing.source !== "user_wallet") {
+        return Response.json(
+          {
+            error:
+              "Only transfers funded by the user's own wallet are claimed here. Agent-wallet transfers are signed by the server.",
+          },
+          { status: 400 },
+        );
+      }
+      const row = await releaseTransferClaim(transferId);
+      return Response.json({ transfer: row });
+    }
+
     if (action === "approve") {
       if (!txHash) {
         return Response.json(
@@ -79,7 +130,7 @@ export async function POST(req: Request) {
     }
 
     return Response.json(
-      { error: `Unknown action "${action}". Use "approve" or "reject".` },
+      { error: `Unknown action "${action}". Use "claim", "approve" or "reject".` },
       { status: 400 },
     );
   } catch (err) {

@@ -68,14 +68,50 @@ export function TransferCard({
     setError(null);
     try {
       if (transfer.source === "user_wallet") {
+        // Claim FIRST, sign SECOND, record THIRD.
+        //
+        // The claim is what lets the server re-check the transfer caps at
+        // the moment the money moves, and what stops this transfer from
+        // being signed twice. Without it the browser would broadcast
+        // first and ask permission afterwards, which is too late to stop
+        // anything.
+        const claim = await fetch("/api/transfers", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "claim",
+            transferId: transfer.id,
+          }),
+        });
+        if (!claim.ok) {
+          const body = await claim.json().catch(() => ({}));
+          throw new Error(body.error ?? "Could not authorize this transfer.");
+        }
+
         const accounts = await connectWallet();
         if (!accounts.length) throw new Error("No account selected.");
-        const { txHash } = await sendFromUserWallet({
-          from: accounts[0],
-          to: transfer.recipient as Address,
-          amount: transfer.amount,
-          token: transfer.token,
-        });
+        let txHash: string;
+        try {
+          ({ txHash } = await sendFromUserWallet({
+            from: accounts[0],
+            to: transfer.recipient as Address,
+            amount: transfer.amount,
+            token: transfer.token,
+          }));
+        } catch (err) {
+          // The user dismissed the extension's dialog, or the extension
+          // refused the chain switch, or the broadcast failed. Release the
+          // claim so the transfer can be retried instead of being locked.
+          await fetch("/api/transfers", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              action: "release",
+              transferId: transfer.id,
+            }),
+          }).catch(() => {});
+          throw err;
+        }
         const res = await fetch("/api/transfers", {
           method: "POST",
           headers: { "Content-Type": "application/json" },

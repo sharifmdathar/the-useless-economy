@@ -115,6 +115,25 @@ total at approval time, with the transfer being approved excluded from its
 own total so it is charged exactly once. A refusal happens before anything
 is signed, and the transfer stays pending with no transaction hash.
 
+**The browser‑wallet path is claim → sign → record**
+
+The browser wallet signs on the client, so the server cannot hold the
+second cap check until after the money has moved. The browser path is
+therefore a three‑step handshake:
+
+| Step | Who | What happens |
+|---|---|---|
+| 1. `POST /api/transfers { action: "claim" }` | server | Re‑checks both caps against live committed spend and hands out a **one‑shot signing claim** (10‑minute TTL) |
+| 2. `eth_sendTransaction` | extension | The user's own wallet signs and broadcasts — no private key ever reaches the app |
+| 3. `POST /api/transfers { action: "approve", txHash }` | server | Records the hash. Refused unless the transfer was claimed, and refused if it was already executed |
+
+Only one claim can be live at a time, so a double‑click, a retried
+request, or a second browser tab cannot broadcast the same transfer
+twice. A claim expires after ten minutes, and the client releases it
+explicitly if the extension dialog is dismissed, so an abandoned approval
+never locks the user out of the transfer. The kill switch blocks the
+browser path too.
+
 The two cap families are separate: the rolling 24h ceiling governs
 user‑initiated transfers, while the per‑job and per‑7‑day ceilings govern
 what the agent spends on commissions and tips. A transfer does not consume
@@ -135,7 +154,7 @@ ceiling.
 | Endpoint | Method | Purpose |
 |---|---|---|
 | `/api/transfers` | `GET` | List transfers, optionally filtered by status |
-| `/api/transfers` | `POST` | Record a browser‑wallet transaction hash, or reject an intent |
+| `/api/transfers` | `POST` | `claim` / `release` a browser‑wallet signing claim, `approve` a transaction hash, or `reject` an intent |
 | `/api/transfers/approve` | `POST` | Execute an approved agent‑wallet transfer |
 
 **Transfer and smart-contract tools**
