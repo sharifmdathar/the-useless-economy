@@ -113,14 +113,26 @@ Weighted length: 253. Attach: the leaderboard / report screenshot.
 
 > Week 3 of The Useless Economy: the agent got a wallet.
 >
-> Not a custodial account, not an API key — its own key, its own address, its own
-> balance. It spends USDC on Base Sepolia to buy its own work.
+> Not a custodial account — its own key, its own address, its own balance. It
+> spends USDC on Base Sepolia to buy its own work.
 >
-> 402 Payment Required → sign → settle, in one agent loop.
+> 402 → sign → settle. One commission, one payment, one hash.
 >
 > Built with @riseinweb3
 
-Weighted length: 278. Attach: the Week 3 demo video (`docs/demo-week3-wallet.mp4`).
+Weighted length: 265. Attach: the Week 3 demo video (`docs/demo-week3-wallet.mp4`).
+
+This is the **second** version of this post. The first
+(`2112580472136139235`) attached an earlier recording in which one commission
+moved 0.105 USDC, because the agent signed two EIP-3009 authorizations for a
+single job. The bug is fixed — the agent now negotiates before its one paid
+request, refuses to sign when the provider's price differs from the approved
+price, and records the amount it actually settled. The recaptured demo shows
+one 0.04 USDC commission and one 0.005 USDC tip, wallet 34.541 → 34.451, with
+both receipts verified on chain.
+
+The defective post was deleted rather than left up, because it demonstrated
+payment behaviour that the product no longer has.
 
 ---
 
@@ -192,7 +204,7 @@ media.
 | Week 1 | post 3 — every step is inspectable | screenshot | `2112577822908940400` | https://x.com/UselessEconomy/status/2112577822908940400 |
 | Week 2 | post 2 — the x402 mechanic | screenshot | `2112579462483386818` | https://x.com/UselessEconomy/status/2112579462483386818 |
 | Week 2 | post 3 — the market | screenshot | `2112579934556496124` | https://x.com/UselessEconomy/status/2112579934556496124 |
-| Week 3 | post 1 — the agent got a wallet | video | `2112580472136139235` | https://x.com/UselessEconomy/status/2112580472136139235 |
+| Week 3 | post 1 — the agent got a wallet | video | `2112649344373727464` | https://x.com/UselessEconomy/status/2112649344373727464 |
 | Week 3 | post 2 — the x402 challenge | screenshot | `2112580947912925576` | https://x.com/UselessEconomy/status/2112580947912925576 |
 | Week 3 | post 3 — tips on-chain | screenshot | `2112581426097082824` | https://x.com/UselessEconomy/status/2112581426097082824 |
 
@@ -201,11 +213,17 @@ attachments are re-encoded to 1280×720 / CRF 31 before upload (3.8 MB and
 5.3 MB instead of 22 MB and 32 MB) — the full-size files failed to upload
 with a network error.
 
-One earlier attempt at the pinned post (`2112584590456234314`) was published
-with a mangled dash in "1–5" and then deleted; its status page now returns
-"Hmm...this page doesn't exist." X's profile header still counts it until the
-account's `statuses_count` re-indexes, which is why the header says 12 posts
-while 11 are live.
+Two posts were published and then deleted, because both showed something the
+product no longer does:
+
+- `2112584590456234314` — the pinned-post attempt with a mangled dash in
+  "1–5".
+- `2112580472136139235` — the first Week 3 video post, whose recording showed
+  one commission moving 0.105 USDC instead of 0.045.
+
+X's profile header still counts deleted posts until the account's
+`statuses_count` re-indexes, which is why the header can say more than the
+number of posts that are actually live.
 
 ### Notes on how these were published
 
@@ -224,6 +242,13 @@ signed-in profile). Three things that cost real time and are worth recording:
 Pinning is also not available through the web UI's own menu in this session —
 the click registered but no request was ever sent. The `PinTweet` /
 `UnpinTweet` GraphQL mutations, called with the page's own session, do work.
+
+Deleting a post has the same shape: the overflow menu opens and the item is
+labelled **"Delete"** (not "Delete post"), and the confirmation is a plain
+modal whose button is `[data-testid="confirmationSheetConfirm"]` — it is not a
+`[role="dialog"]` node. Driving that UI produces the `DeleteTweet` request, so
+the operation id can be read off the wire instead of being guessed. The id
+X used here was `nxpZCY2K-I6QoFHAHeojFQ`.
 
 ---
 
