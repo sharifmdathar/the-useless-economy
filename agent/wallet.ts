@@ -248,15 +248,31 @@ function parseHeader(header: string): {
  * Fetch a URL. If it demands payment (402 + x402 requirements), sign an
  * EIP-3009 USDC authorization with the agent's wallet and retry once with
  * X-PAYMENT. Returns the deliverable plus settlement info (incl. tx hash).
+ *
+ * EXACTLY-ONCE, BUYER SIDE
+ * ------------------------
+ * `opts.expectedPrice` is what the caller INTENDS to pay. If the provider's
+ * 402 advertises a different price, the buyer REFUSES instead of silently
+ * paying the (possibly higher) advertised price. Without this the agent
+ * could ask for a 0.03 counter-offer and still be billed 0.05, because the
+ * buyer signs whatever price the 402 body says.
+ *
+ * The returned `settledAmountUsdc` is the amount the provider's response
+ * says actually settled, so callers record what moved rather than what they
+ * hoped to move.
  */
-export async function payAndFetch(url: string, opts?: { maxPrice?: number }) {
+export async function payAndFetch(
+  url: string,
+  opts?: { maxPrice?: number; expectedPrice?: number },
+) {
   const first = await fetch(url);
   if (first.status !== 402) {
     if (!first.ok)
       throw new Error(
         `Provider ${first.status}: ${(await first.text()).slice(0, 200)}`,
       );
-    return { data: await first.json() };
+    // No payment needed: nothing settled, so the settled amount is zero.
+    return { data: await first.json(), settledAmountUsdc: 0 };
   }
 
   const req = (await first.json()) as X402Requirement;
@@ -269,6 +285,18 @@ export async function payAndFetch(url: string, opts?: { maxPrice?: number }) {
     throw new Error(
       `Provider asks ${price} USDC, above the ${opts.maxPrice} cap. Refusing to pay.`,
     );
+  }
+
+  // The price we INTEND to pay must be the price we are asked to pay. If the
+  // provider quotes something else, refuse rather than sign a different
+  // amount than the one the caller authorised.
+  if (opts?.expectedPrice != null) {
+    const expected = opts.expectedPrice;
+    if (Math.abs(price - expected) > 1e-9) {
+      throw new Error(
+        `Provider quoted ${price} USDC, expected ${expected} USDC. Refusing to pay a different amount.`,
+      );
+    }
   }
 
   const account = requireAccount();
@@ -322,14 +350,28 @@ export async function payAndFetch(url: string, opts?: { maxPrice?: number }) {
   const body = (await paid.json().catch(() => ({}))) as {
     settledTx?: string;
     error?: string;
+    paidUsdc?: number;
+    paid?: number;
   };
+
+  // The amount that actually settled, as the provider reports it. Prefer the
+  // provider's own report; fall back to the amount we signed (which the
+  // contract enforces). Never the model's claim.
+  const settledAmountUsdc =
+    typeof body.paidUsdc === "number"
+      ? body.paidUsdc
+      : typeof body.paid === "number"
+        ? body.paid
+        : price;
+
   return {
     data: body,
+    settledAmountUsdc,
     payment:
       paid.status === 200
         ? {
             status: "settled" as const,
-            amount: `${price} USDC`,
+            amount: `${settledAmountUsdc} USDC`,
             to: req.payTo,
             tx: body.settledTx,
           }

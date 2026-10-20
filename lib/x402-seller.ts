@@ -5,6 +5,23 @@
  *   - no X-PAYMENT header    -> 402 with the x402 requirements (price/payTo/asset)
  *   - header present         -> verify + settle on-chain, return { payment, settledTx }
  *   - below persona floor    -> 402 refusal (the negotiation rule, in code)
+ *
+ * EXACTLY-ONCE SETTLEMENT
+ * -----------------------
+ * A provider is paid through an EIP-3009 authorization. The authorization's
+ * nonce is what makes it single-use: the USDC contract refuses to spend the
+ * same authorization twice, so a replayed X-PAYMENT header can never move the
+ * money a second time.
+ *
+ * The danger is not replay of the SAME authorization (the contract stops
+ * that) — it is signing a SECOND, DIFFERENT authorization for the same job.
+ * That is what happened before this guard: `commission_job` asked the
+ * provider for its price (which the provider settled and paid for) and then
+ * asked AGAIN at a counter-offer price, producing two distinct nonces and
+ * two funded transfers for one piece of work.
+ *
+ * So settlement is keyed by the PAYMENT IDENTITY (payer + nonce), and the
+ * ledger amount is the amount the chain actually moved.
  */
 import {
   verifyPayment,
@@ -65,6 +82,64 @@ export type GuardResult =
       effectivePrice: number;
     };
 
+/**
+ * The identity of a single x402 payment: the payer's address plus the
+ * EIP-3009 nonce. Two requests with the same identity are the SAME payment
+ * and must settle at most once.
+ */
+export function paymentIdentity(
+  payment: Pick<X402PaymentBody, "from" | "nonce">,
+): string {
+  return `${payment.from.toLowerCase()}:${payment.nonce.toLowerCase()}`;
+}
+
+/**
+ * Settlements this process already performed, keyed by payment identity.
+ *
+ * This is an in-process memo of payments the provider has ALREADY paid for.
+ * It is not a substitute for the contract's own single-use guarantee (that is
+ * the real defence against a replayed header) — it exists so the provider
+ * refuses to even attempt a second settlement of the same authorization and
+ * can answer with the ORIGINAL transaction hash instead.
+ */
+const settledPayments = new Map<string, string>();
+
+/** Test hook: forget every memoized settlement. */
+export function resetSettlementMemo() {
+  settledPayments.clear();
+}
+
+/** Test hook: the settlement memo, for assertions. */
+export function listSettledPayments(): { identity: string; tx: string }[] {
+  return [...settledPayments.entries()].map(([identity, tx]) => ({
+    identity,
+    tx,
+  }));
+}
+
+/**
+ * Settle a payment AT MOST ONCE for a given payment identity.
+ *
+ * This is the single choke point for provider settlement. The first call for
+ * an identity runs `settle` and remembers the transaction. Every later call
+ * for the same identity returns the ORIGINAL transaction without calling
+ * `settle` again — so a replayed request can never move money a second time.
+ *
+ * The EIP-3009 nonce gives a second, on-chain guarantee (the USDC contract
+ * refuses to spend one authorization twice). This memo is the application
+ * guarantee: it stops the SECOND ATTEMPT rather than merely failing it.
+ */
+export async function settleOnce(
+  identity: string,
+  settle: () => Promise<{ tx: string }>,
+): Promise<{ tx: string; replay: boolean }> {
+  const already = settledPayments.get(identity);
+  if (already) return { tx: already, replay: true };
+  const { tx } = await settle();
+  settledPayments.set(identity, tx);
+  return { tx, replay: false };
+}
+
 export async function guardOrSettle(
   req: Request,
   slug: ProviderSlug,
@@ -116,9 +191,37 @@ export async function guardOrSettle(
     };
   }
 
+  // EXACTLY-ONCE: this authorization has already been paid for. Do not
+  // attempt to settle it again — answer with the original transaction.
+  const identity = paymentIdentity(payment);
+  const alreadySettled = settledPayments.get(identity);
+  if (alreadySettled) {
+    return {
+      kind: "settled",
+      payment,
+      settledTx: alreadySettled,
+      effectivePrice: Number(payment.value) / 10 ** 6,
+    };
+  }
+
   let tx: string;
   try {
-    ({ tx } = await settlePaymentFromHeader(header));
+    // EXACTLY-ONCE choke point. The first settlement for this payment
+    // identity runs; every later attempt for the same identity returns the
+    // ORIGINAL transaction without touching the chain.
+    const settledOnce = await settleOnce(identity, async () => {
+      const { tx: settledTx } = await settlePaymentFromHeader(header);
+      return { tx: settledTx };
+    });
+    if (settledOnce.replay) {
+      return {
+        kind: "settled",
+        payment,
+        settledTx: settledOnce.tx,
+        effectivePrice: Number(payment.value) / 10 ** 6,
+      };
+    }
+    tx = settledOnce.tx;
   } catch (err) {
     // Typical causes: the facilitator's relayer lost a nonce race, the
     // network is unreachable, or the settlement wallet is unusable. Return a

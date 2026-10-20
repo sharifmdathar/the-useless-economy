@@ -17,6 +17,9 @@ import path from "path";
 
 const SETTLEMENTS_PATH = path.join(process.cwd(), "settlements.json");
 
+/** The settlement-records file path, for callers that must read it directly. */
+export const SETTLEMENTS_FILE = SETTLEMENTS_PATH;
+
 export type Settlement = {
   ts: string;
   provider: string;

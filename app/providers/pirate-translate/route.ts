@@ -19,9 +19,13 @@ export async function GET(req: Request) {
     Number(url.searchParams.get("price") ?? "") || undefined;
 
   // x402: 402 requirements when PAYWALL=1 and no valid payment, settle otherwise.
+  // The negotiated price MUST be passed through: the buyer signs an
+  // authorization for whatever price the 402 advertises, so advertising the
+  // full ask while intending to pay a counter-offer is what made the buyer
+  // sign (and pay) the ask.
   let settled: Awaited<ReturnType<typeof guardOrSettle>> | undefined;
   if (process.env.PAYWALL === "1") {
-    settled = await guardOrSettle(req, "capn");
+    settled = await guardOrSettle(req, "capn", negotiatedPrice);
     if (settled.kind === "requirements") return settled.response;
   }
 

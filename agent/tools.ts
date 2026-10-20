@@ -34,6 +34,7 @@ import {
   recordSettlement,
   takeUnloggedSettlement,
   markSettlementLogged,
+  SETTLEMENTS_FILE,
 } from "./settlements";
 import { callLLM, extractJson, withRetry } from "@/lib/llm";
 import {
@@ -71,21 +72,63 @@ function assertTestnet() {
   }
 }
 
-/** Rolling 7-day spend from ledger.json (paid + tips). */
+/**
+ * Rolling 7-day spend that the caps are checked against.
+ *
+ * Two sources, added together:
+ *
+ *  1. The ledger: every judged deliverable (paidAmount) and every tip
+ *     (tipUsdc).
+ *  2. The settlement records: payments that settled on-chain but whose
+ *     ledger row has not been written yet (the judge has not run).
+ *
+ * The second source matters. A commission settles the money BEFORE the judge
+ * writes the ledger row, so a cap computed from the ledger alone under-counts
+ * by exactly the amount of the payment that just left the wallet. With a
+ * 1 USDC weekly cap that is the difference between enforcing the cap and
+ * not enforcing it.
+ *
+ * Settlements already represented in the ledger are counted once: a
+ * settlement is marked `logged` when a ledger row consumes it, and only the
+ * unlogged ones are added here.
+ */
 function weekSpend(): number {
   const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  let fromLedger = 0;
   try {
     const rows = JSON.parse(fs.readFileSync(LEDGER_PATH, "utf8")) as {
       ts: string;
       paidAmount?: number;
       tipUsdc?: number;
     }[];
-    return rows
+    fromLedger = rows
       .filter((r) => new Date(r.ts).getTime() >= cutoff)
       .reduce((s, r) => s + (r.paidAmount ?? 0) + (r.tipUsdc ?? 0), 0);
   } catch {
-    return 0;
+    fromLedger = 0;
   }
+
+  // Payments that settled but are not yet in a ledger row.
+  let unlogged = 0;
+  try {
+    const settlements = JSON.parse(
+      fs.readFileSync(SETTLEMENTS_FILE, "utf8"),
+    ) as { ts: string; amountUsdc?: number; logged?: boolean }[];
+    if (Array.isArray(settlements)) {
+      unlogged = settlements
+        .filter(
+          (s) =>
+            !s.logged &&
+            typeof s.amountUsdc === "number" &&
+            new Date(s.ts).getTime() >= cutoff,
+        )
+        .reduce((s, r) => s + (r.amountUsdc ?? 0), 0);
+    }
+  } catch {
+    unlogged = 0;
+  }
+
+  return fromLedger + unlogged;
 }
 
 function budgetGuard(kind: "commission" | "tip", amount: number) {
@@ -661,77 +704,56 @@ export const paidTools: Tool[] = [
           };
         }
       }
-      budgetGuard("commission", meta.ask);
 
-      // Phase 1: ask price attempt; Phase 3 (PAYWALL=1): real 402 -> settle.
-      const askUrl = `${baseUrl}${meta.path}?${buildParams(provider, job)}&price=${meta.ask}`;
-      const first = await payAndFetch(askUrl, { maxPrice: MAX_PER_JOB });
-      // Free-run mode (PAYWALL off): the first response is the deliverable itself.
+      // ONE payment per commission.
+      //
+      // In this protocol asking a provider for its price IS a paid request:
+      // the buyer signs an EIP-3009 authorization for whatever price the 402
+      // advertises, and the provider settles it. So the old "ask at the full
+      // ask, then ask again at the counter-offer" sequence produced TWO
+      // distinct authorizations and TWO funded transfers for one piece of
+      // work. The negotiation now happens BEFORE the single paid request:
+      // the price we intend to pay is the price we ask for.
+      const intendedPrice =
+        counterOffer != null && counterOffer < meta.ask ? counterOffer : meta.ask;
+      budgetGuard("commission", intendedPrice);
+
+      const payUrl = `${baseUrl}${meta.path}?${buildParams(provider, job)}&price=${intendedPrice}`;
+      const result = await payAndFetch(payUrl, {
+        maxPrice: MAX_PER_JOB,
+        expectedPrice: intendedPrice,
+      });
+
+      // Free-run mode (PAYWALL off): the response is the deliverable itself.
       if (
-        (first.payment as { status?: string } | undefined)?.status !==
+        (result.payment as { status?: string } | undefined)?.status !==
           "settled" &&
-        !(first.payment as { httpStatus?: number } | undefined)?.httpStatus
+        !(result.payment as { httpStatus?: number } | undefined)?.httpStatus
       ) {
         return {
           provider,
           job,
           negotiated: false,
           paid: 0,
-          deliverable: first.data,
+          deliverable: result.data,
         };
       }
 
-      // PAYWALL on: if a counter-offer was accepted by the floors above, retry at lower price.
-      if (counterOffer != null && counterOffer < meta.ask) {
-        const counterUrl = `${baseUrl}${meta.path}?${buildParams(provider, job)}&price=${counterOffer}`;
-        const second = await payAndFetch(counterUrl, { maxPrice: MAX_PER_JOB });
-        if (
-          (second.payment as { status?: string } | undefined)?.status ===
-          "settled"
-        ) {
-          const tx = (second.payment as { tx?: string }).tx;
-          // Record the real settlement so the ledger row can carry the
-          // amount that actually moved, not whatever the model claims.
-          if (tx) {
-            await recordSettlement({
-              provider,
-              job,
-              amountUsdc: counterOffer,
-              txHash: tx,
-              kind: "commission",
-            });
-          }
-          return {
-            provider,
-            job,
-            negotiated: true,
-            counterOffer,
-            paid: counterOffer,
-            tx,
-            deliverable: second.data,
-          };
-        }
-        return {
-          provider,
-          job,
-          negotiated: false,
-          outcome: "REJECTED",
-          detail: second.payment,
-        };
-      }
-
-      // No counter: settle at the ask (payAndFetch already signed + retried).
       if (
-        (first.payment as { status?: string } | undefined)?.status === "settled"
+        (result.payment as { status?: string } | undefined)?.status === "settled"
       ) {
-        const tx = (first.payment as { tx?: string }).tx;
-        // Record the real settlement so the ledger row can carry the amount
-        // that actually moved, not whatever the model claims.
+        const tx = (result.payment as { tx?: string }).tx;
+        // The amount that ACTUALLY settled, as reported by the provider's
+        // own settlement code — not the amount we intended and not whatever
+        // the model claims. This is what the ledger and the spend caps use.
+        const settledAmount = result.settledAmountUsdc;
+        // Record the real settlement so the ledger row can carry the
+        // amount that actually moved, not whatever the model claims.
         if (tx) {
           await recordSettlement({
             provider,
             job,
-            amountUsdc: meta.ask,
+            amountUsdc: settledAmount,
             txHash: tx,
             kind: "commission",
           });
@@ -739,13 +761,16 @@ export const paidTools: Tool[] = [
         return {
           provider,
           job,
-          negotiated: false,
-          paid: meta.ask,
+          negotiated: counterOffer != null && counterOffer < meta.ask,
+          ...(counterOffer != null && counterOffer < meta.ask
+            ? { counterOffer }
+            : {}),
+          paid: settledAmount,
           tx,
-          deliverable: first.data,
+          deliverable: result.data,
         };
       }
-      return { provider, job, outcome: "REJECTED", detail: first.payment };
+      return { provider, job, outcome: "REJECTED", detail: result.payment };
     },
   },
 

@@ -22,7 +22,12 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --experimental-strip-types scripts/run-test.ts scripts/test-no-double-payment.ts",
+    "test:double-payment": "node --experimental-strip-types scripts/run-test.ts scripts/test-no-double-payment.ts",
+    "test:spend-cap": "node --experimental-strip-types scripts/run-test.ts scripts/test-spend-cap-accounting.ts",
+    "test:commission-live": "node --experimental-strip-types scripts/run-test.ts scripts/test-commission-single-payment-live.ts",
+    "verify:tx": "node --experimental-strip-types scripts/run-test.ts scripts/verify-single-settlement-tx.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.8.0",
