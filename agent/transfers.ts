@@ -96,14 +96,37 @@ function writeAll(rows: PendingTransfer[]) {
   );
 }
 
-/** Rolling 24h spend of EXECUTED transfers, by token. */
-function dailySpend(token: TokenSymbol): number {
+/**
+ * Rolling 24h spend by token.
+ *
+ * Counts every transfer that is COMMITTED, not just the ones that already
+ * settled:
+ *
+ *  - `executed` — the money has left the wallet.
+ *  - `pending` / `approved` — the user has already authorised it, so it is
+ *    about to leave the wallet.
+ *
+ * Pending intents have to be counted because the cap is checked when the
+ * intent is filed, but the money only moves when the user clicks approve. If
+ * pending intents were invisible to the cap, a user could file N intents that
+ * each pass the cap on their own, then approve all of them, and the total
+ * would blow through the daily ceiling.
+ *
+ * `excludeId` drops the transfer being executed, so it is not counted twice.
+ */
+function dailySpend(
+  token: TokenSymbol,
+  excludeId?: string,
+): number {
   const cutoff = Date.now() - 24 * 60 * 60 * 1000;
   return readAll()
     .filter(
       (t) =>
+        t.id !== excludeId &&
         t.token === token &&
-        t.status === "executed" &&
+        (t.status === "executed" ||
+          t.status === "pending" ||
+          t.status === "approved") &&
         new Date(t.createdAt).getTime() >= cutoff,
     )
     .reduce((s, t) => s + Number(t.amount), 0);
@@ -168,7 +191,7 @@ export async function createPendingTransfer(args: {
   const spent = dailySpend(token.symbol);
   if (spent + numeric > MAX_DAILY_TRANSFER) {
     throw new Error(
-      `Daily transfer cap of ${MAX_DAILY_TRANSFER} ${token.symbol} would be breached (already sent ${spent.toFixed(6)} + ${amount}). Nothing was sent.`,
+      `Daily transfer cap of ${MAX_DAILY_TRANSFER} ${token.symbol} would be breached (already committed ${spent.toFixed(6)} + ${amount}). Nothing was sent.`,
     );
   }
 
@@ -271,6 +294,24 @@ export async function executeAgentTransfer(
   if (!token) throw new Error(`Unsupported token ${row.token}.`);
   const units = amountToUnits(token, row.amount);
   if (units === null) throw new Error(`Invalid stored amount ${row.amount}.`);
+
+  // Re-check the caps at execution time, not just when the intent was filed.
+  // Between filing and approval the user (or a concurrent request) can have
+  // committed more transfers, and a cap that is only checked at intent time
+  // can be walked straight through. This transfer is excluded from its own
+  // total, so it is charged exactly once.
+  const numeric = Number(row.amount);
+  if (numeric > MAX_TRANSFER) {
+    throw new Error(
+      `${row.amount} ${token.symbol} exceeds the ${MAX_TRANSFER} ${token.symbol} per-transfer cap. Nothing was sent.`,
+    );
+  }
+  const committed = dailySpend(token.symbol, row.id);
+  if (committed + numeric > MAX_DAILY_TRANSFER) {
+    throw new Error(
+      `Daily transfer cap of ${MAX_DAILY_TRANSFER} ${token.symbol} would be breached (already committed ${committed.toFixed(6)} + ${row.amount}). Nothing was sent.`,
+    );
+  }
 
   try {
     const account = loadAccountForTransfer();

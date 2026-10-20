@@ -107,6 +107,22 @@ USDC transfers, provider settlement, and tips all go through the x402 facilitato
 | Per 7 days (agent spend) | `1` USDC | hardcoded (`WEEKLY_CAP`) |
 | Kill switch | off | `KILL_SWITCH=1` freezes commissioning, tipping, and transfers |
 
+The transfer caps are checked **twice**: once when the intent is filed, and
+again when the user approves it and the money actually moves. A pending or
+approved intent counts as committed spend, so filing many intents cannot
+walk through the 24h ceiling — the second check re‑runs against the live
+total at approval time, with the transfer being approved excluded from its
+own total so it is charged exactly once. A refusal happens before anything
+is signed, and the transfer stays pending with no transaction hash.
+
+The two cap families are separate: the rolling 24h ceiling governs
+user‑initiated transfers, while the per‑job and per‑7‑day ceilings govern
+what the agent spends on commissions and tips. A transfer does not consume
+the agent's weekly budget, and a commission does not consume the transfer
+ceiling.
+
+`npm run test:transfer-caps` proves both halves of the transfer cap.
+
 **Supported assets (Base Sepolia only)**
 
 | Symbol | Contract / type | Aliases accepted |

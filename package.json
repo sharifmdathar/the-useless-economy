@@ -27,6 +27,7 @@
     "test:double-payment": "node --experimental-strip-types scripts/run-test.ts scripts/test-no-double-payment.ts",
     "test:spend-cap": "node --experimental-strip-types scripts/run-test.ts scripts/test-spend-cap-accounting.ts",
     "test:commission-live": "node --experimental-strip-types scripts/run-test.ts scripts/test-commission-single-payment-live.ts",
+    "test:transfer-caps": "node --experimental-strip-types scripts/run-test.ts scripts/test-transfer-caps.ts",
     "verify:tx": "node --experimental-strip-types scripts/run-test.ts scripts/verify-single-settlement-tx.ts"
   },
   "dependencies": {
