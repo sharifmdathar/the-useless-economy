@@ -130,6 +130,12 @@ export async function createPendingTransfer(args: {
   source?: TransferSource;
   prompt?: string;
 }): Promise<PendingTransfer> {
+  if (process.env.KILL_SWITCH === "1") {
+    throw new Error(
+      "KILL_SWITCH is set — the economy is frozen. No transfers will be created or sent.",
+    );
+  }
+
   const token = resolveToken(args.token);
   if (!token) {
     throw new Error(
@@ -253,6 +259,12 @@ export async function executeAgentTransfer(
   if (!row) throw new Error(`No transfer with id ${id}.`);
   if (row.status !== "pending" && row.status !== "approved") {
     throw new Error(`Transfer ${id} is ${row.status}, not pending.`);
+  }
+  // A transfer created before the switch was flipped must not still settle.
+  if (process.env.KILL_SWITCH === "1") {
+    throw new Error(
+      "KILL_SWITCH is set — the economy is frozen. This transfer was not sent.",
+    );
   }
 
   const token = resolveToken(row.token);

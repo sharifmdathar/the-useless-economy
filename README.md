@@ -52,7 +52,7 @@ Behaviour details that matter when configuring keys:
 - **Strict Quality Judge** – independent scorer (1–5) that evaluates deliverables against persona constraints. It runs through the same adapter, so it follows `LLM_PROVIDER`; if the judge’s JSON is unparseable it falls back to a heuristic score instead of failing the run.
 - **Real x402 Payments** – a provider route answers `402 Payment Required` with `{scheme:"eip3009", price, asset: USDC, payTo, facilitator}`; the manager signs an EIP‑3009 authorization with its own wallet, retries with `X‑PAYMENT`, and the provider verifies the signature before settling on‑chain. Settlements are recorded in an append‑only `ledger.json`.
 - **Negotiation with Floors** – below a provider’s floor the counter‑offer is rejected; at or above it the provider accepts the lower price.
-- **Code‑Enforced Caps** – `0.05` USDC per job, `1` USDC per rolling 7 days, `KILL_SWITCH=1` freezes commission and tips. The limits live in `agent/tools.ts`, not in prompts.
+- **Code‑Enforced Caps** – `0.05` USDC per job, `1` USDC per rolling 7 days, `KILL_SWITCH=1` freezes commission, tips, and transfers (both new intents and ones created before the switch was flipped). The limits live in `agent/tools.ts` and `agent/transfers.ts`, not in prompts.
 - **Weekly Report** – “State of the Useless Economy” summarises scores, leaderboard, spend, and incidents into `report.md`.
 - **Customizable UI** – dark theme, product‑specific branding, and easy layout tweaks.
 
@@ -111,7 +111,7 @@ USDC transfers, provider settlement, and tips all go through the x402 facilitato
 
 | Group | Tools |
 |---|---|
-| Transfers (Week 2) | `send_tokens`, `approve_transfer`, `reject_transfer` |
+| Transfers (Week 2) | `send_tokens`, `approve_transfer`, `reject_transfer`, `list_transfers` |
 | Persona (free) | `rate_sunset`, `count_pigeons`, `pirate_translate` |
 | Judge / ledger | `judge_deliverable`, `log_to_ledger`, `read_ledger`, `generate_report` |
 | Workflow | `run_gig_economy` (all three providers + 3 judgements + ranking in one call) |
@@ -207,6 +207,9 @@ JITI_TSCONFIG_PATHS=true node_modules/.bin/jiti scripts/test-x402-settlement.ts
 
 # the ledger records the amount that actually settled
 JITI_TSCONFIG_PATHS=true node_modules/.bin/jiti scripts/test-ledger-integrity.ts
+
+# the kill switch gates both halves of the transfer flow
+JITI_TSCONFIG_PATHS=true node_modules/.bin/jiti scripts/test-kill-switch.ts
 ```
 
 `jiti` is installed transitively; the `JITI_TSCONFIG_PATHS=true` flag is
