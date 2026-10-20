@@ -7,9 +7,11 @@
 **The Useless Economy** – an agent‑to‑agent gig market where a manager AI hires three provider AIs over x402 to do pointless jobs (rate sunsets, count pigeons, pirate‑translate), quality‑judges the work, and settles tips on‑chain on Base Sepolia testnet.
 
 ## Project Description
-An AI agent platform that connects a manager “Foreman” to three specialist providers (Soleil, Feathers, Cap’n) via x402 payments. The manager assigns a job, the providers compete on price, the manager picks a winner, the judge scores the deliverable, and tips are paid on‑chain. All transactions happen on the Base Sepolia **testnet**; the agent owns its own wallet for gas and tips.
+An AI agent platform that connects a manager “Foreman” to three specialist providers (Soleil, Feathers, Cap’n) via x402 payments. The manager assigns a job, the providers compete on price, the manager picks a winner, the judge scores the deliverable, and tips are paid on‑chain. All transactions happen on the Base Sepolia **testnet**; the agent owns its own wallet, and its USDC payments and tips are relayed by the x402 facilitator, which pays the gas — so the agent wallet never needs ETH.
 
 **Week 2 — natural-language transfers.** The Foreman can now also be *told* to move money. Ask it “send 1 USDC to 0x…” and the agent resolves the token, the amount, and the recipient, validates all three in code, and raises a **pending transfer intent**. Nothing is signed at that point. A review card appears in the chat; only after an explicit approval does the agent sign and broadcast, and the transaction hash is written back. Rejecting the card cancels the intent permanently.
+
+**Week 3 — the agent gets its own wallet.** The Foreman carries its own Base Sepolia wallet and spends from it: it commissions providers over x402, tips them on-chain, and leaves a receipt for every payment. The wallet holds no ETH — the x402 facilitator relays the USDC settlement and pays the gas.
 
 The Foreman is a tool‑calling loop (`agent/agent.ts`, max 10 steps): it sends the conversation plus the tool schemas to the model, runs whatever tools come back, feeds the results into the next turn, and stops when the model answers in text. The loop speaks the OpenAI wire format (`tool_calls` / `role: "tool"`) because Groq is OpenAI‑compatible, and translates to Gemini’s `Content` parts on the Gemini path — so the same tool schemas drive either provider unchanged.
 
@@ -22,9 +24,9 @@ The Foreman is a tool‑calling loop (`agent/agent.ts`, max 10 steps): it sends 
 | State Management | React hooks (`useState`/`useEffect`) | — |
 | AI Engine | Provider adapter: Gemini (`@google/genai`) + Groq (OpenAI‑compatible HTTP) | ^2.24.0 / `fetch` |
 | Wallet / x402 | viem (EIP‑3009 `transferWithAuthorization`) | ^2.56.9 |
-| Gas Sponsorship | x402 facilitator (`https://x402.org/facilitator`), network `eip155:84532` | HTTP v2 |
+| Gas Sponsorship | x402 facilitator (`https://x402.org/facilitator`), network `eip155:84532`, protocol v2 | HTTP v2 |
 | Browser Wallet | EIP‑1193 injected provider (`window.ethereum`) — MetaMask / Rabby / Brave | — |
-| Database | Local append‑only JSON (`ledger.json`, `settlements.json`, `.transfers.json`, `report.md`, `.provider-status.json`) | — |
+| Storage | Local append‑only JSON (`ledger.json`, `settlements.json`, `.transfers.json`, `report.md`, `.provider-status.json`) | — |
 | Tooling | TypeScript `tsc --noEmit`; no test framework is installed | ^5.9.3 |
 | Runtime | Node.js | >=20 |
 
@@ -50,11 +52,23 @@ Behaviour details that matter when configuring keys:
 ## Key Features
 - **Agent‑to‑Agent Gig Market** – three specialized providers (Soleil, Feathers, Cap’n) with distinct personalities and pricing policies.
 - **Strict Quality Judge** – independent scorer (1–5) that evaluates deliverables against persona constraints. It runs through the same adapter, so it follows `LLM_PROVIDER`; if the judge’s JSON is unparseable it falls back to a heuristic score instead of failing the run.
-- **Real x402 Payments** – a provider route answers `402 Payment Required` with `{scheme:"eip3009", price, asset: USDC, payTo, facilitator}`; the manager signs an EIP‑3009 authorization with its own wallet, retries with `X‑PAYMENT`, and the provider verifies the signature before settling on‑chain. Settlements are recorded in an append‑only `ledger.json`.
+- **Real x402 Payments** – a provider route answers `402 Payment Required` with `{scheme:"eip3009", price, asset: USDC, payTo, facilitator}`; the manager signs an EIP‑3009 authorization with its own wallet, and the x402 facilitator relays it, pays the gas, and returns the transaction hash. The amount and hash are recorded in an append‑only `ledger.json`, written by the code that observed the settlement.
 - **Negotiation with Floors** – below a provider’s floor the counter‑offer is rejected; at or above it the provider accepts the lower price.
 - **Code‑Enforced Caps** – `0.05` USDC per job, `1` USDC per rolling 7 days, `KILL_SWITCH=1` freezes commission, tips, and transfers (both new intents and ones created before the switch was flipped). The limits live in `agent/tools.ts` and `agent/transfers.ts`, not in prompts.
+- **Grounded Standings** – the scores shown in the chat are derived in code from the recorded `run_gig_economy` result and rendered as a table, so the summary can never contradict the tool output.
 - **Weekly Report** – “State of the Useless Economy” summarises scores, leaderboard, spend, and incidents into `report.md`.
 - **Customizable UI** – dark theme, product‑specific branding, and easy layout tweaks.
+
+### Week 3: The agent gets its own wallet
+
+The agent carries its own Base Sepolia wallet, spends from it, and leaves a receipt for every cent.
+
+- **Its own key** — the agent's wallet is generated locally (or supplied via `WALLET_PRIVATE_KEY`) and stored in `.agent-wallet.json`, which is gitignored. The private key never leaves the server.
+- **Gasless USDC** — payments, tips, and user-initiated USDC transfers all settle as EIP-3009 `transferWithAuthorization` authorisations relayed by the x402 facilitator, which pays the gas. The agent wallet holds **zero ETH** and still pays real USDC.
+- **The x402 challenge** — provider routes answer `402 Payment Required` with the price, the USDC contract, the `payTo` address, and the facilitator URL. The agent signs and settles against those requirements.
+- **Tips** — `tip_provider` pays a provider on-chain with the same gas-sponsored path. A tip always leaves a local trace: it attaches to an existing paid ledger row when there is one, and otherwise creates a standalone row. Tip settlements are tagged `kind: "tip"`, and the judge only ever claims *commission* settlements — so a tip can never be reported later as the price of commissioned work.
+- **Payout resolution** — a tip is paid to a valid `PROVIDER_PAY_TO_OVERRIDE` if one is set, otherwise to the funded provider wallet. If neither exists the tip is **refused** rather than sent to an unowned placeholder address.
+- **Visible balances** — `/api/wallet` returns both the ETH and the USDC balance, and the wallet panel shows them. The USDC figure is the one that moves.
 
 ### Week 2: Natural-language crypto transfers
 
@@ -149,8 +163,9 @@ Raw files live in `docs/`:
 ## Social Media
 - **Twitter/X** – [@riseinweb3](https://x.com/riseinweb3) (tagged in all posts).
 - **Product page** – [@UselessEconomy](https://x.com/UselessEconomy) — dedicated account for this product; pinned post summarises the stack.
-- **Discord** – community discussion channel for developers and users.
 - **GitHub** – source code and demo artifacts: https://github.com/sharifmdathar/the-useless-economy
+
+Posting plan: three posts per week, each tagging `@riseinweb3` — see `docs/TWITTER_POSTS.md`.
 
 ## Quick Start
 ```bash
@@ -173,7 +188,7 @@ npm run dev
 > is a devDependency. Install with `npm ci --include=dev` (or unset
 > `NODE_ENV`) before building.
 
-Provider routes run free unless `PAYWALL=1`, which makes them answer a real x402 `402` until paid. Tips still transfer on‑chain on Base Sepolia, so the agent wallet needs a little testnet ETH and USDC.
+Provider routes run free unless `PAYWALL=1`, which makes them answer a real x402 `402` until paid. With `PAYWALL=1` the agent needs USDC on Base Sepolia to pay for the work.
 
 > **The agent wallet does not need ETH.** USDC transfers, x402 settlement, and
 > tips are all relayed by the x402 facilitator, which pays the gas. Only
@@ -211,6 +226,12 @@ JITI_TSCONFIG_PATHS=true node_modules/.bin/jiti scripts/test-ledger-integrity.ts
 
 # the kill switch gates both halves of the transfer flow
 JITI_TSCONFIG_PATHS=true node_modules/.bin/jiti scripts/test-kill-switch.ts
+
+# a tip settles on-chain and cannot be claimed as commission income
+JITI_TSCONFIG_PATHS=true node_modules/.bin/jiti scripts/test-tip-settlement.ts
+
+# the chat standings always agree with the recorded tool result
+JITI_TSCONFIG_PATHS=true node_modules/.bin/jiti scripts/test-standings-grounding.ts
 ```
 
 `jiti` is installed transitively; the `JITI_TSCONFIG_PATHS=true` flag is
@@ -227,7 +248,7 @@ All of it lives in `.env` (see `.env.example`):
 | `STRICT_PROVIDER` | unset | `1` disables key fallthrough |
 | `WALLET_PRIVATE_KEY` | unset | Reuse a test wallet instead of creating one in the UI |
 | `PAYWALL` | `0` | `1` makes provider routes answer a real 402 |
-| `KILL_SWITCH` | `0` | `1` freezes commissioning and tipping |
+| `KILL_SWITCH` | `0` | `1` freezes commissioning, tipping, transfer-intent creation, and transfer execution |
 | `PROVIDER_PRIVATE_KEY` | unset | Provider settlement wallet |
 | `PROVIDER_PAY_TO_OVERRIDE` | unset | Force one payout address (the funded provider wallet is used by default) |
 | `MAX_TRANSFER_USDC` | `100` | Per‑transfer ceiling for user-initiated transfers |
