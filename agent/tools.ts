@@ -32,6 +32,7 @@ import { resolvePayToStrict } from "@/lib/x402-seller";
 import { gaslessUsdcTransfer } from "@/lib/facilitator-retry";
 import {
   recordSettlement,
+  peekUnloggedSettlement,
   takeUnloggedSettlement,
   markSettlementLogged,
   SETTLEMENTS_FILE,
@@ -75,60 +76,183 @@ function assertTestnet() {
 /**
  * Rolling 7-day spend that the caps are checked against.
  *
- * Two sources, added together:
+ * The ledger and the settlement records are two views of the SAME money, so
+ * they are RECONCILED rather than added together. Each payment is counted
+ * exactly once, at the amount that actually left the wallet.
  *
- *  1. The ledger: every judged deliverable (paidAmount) and every tip
- *     (tipUsdc).
- *  2. The settlement records: payments that settled on-chain but whose
- *     ledger row has not been written yet (the judge has not run).
+ * How a payment is counted:
  *
- * The second source matters. A commission settles the money BEFORE the judge
- * writes the ledger row, so a cap computed from the ledger alone under-counts
- * by exactly the amount of the payment that just left the wallet. With a
- * 1 USDC weekly cap that is the difference between enforcing the cap and
- * not enforcing it.
+ *  1. A ledger row that carries a transaction hash is matched to the
+ *     settlement with that hash. The SETTLEMENT amount wins, because it is
+ *     recorded at the moment the payment confirms and therefore reflects the
+ *     chain; the ledger's `paidAmount` may be stale.
+ *  2. A ledger row whose hash is missing (legacy rows written before the
+ *     settlement was recorded) is matched to a settlement by provider,
+ *     amount and timestamp, but only when that match is unambiguous.
+ *  3. A ledger row with no settlement behind it is counted at its own
+ *     amount — the payment happened, even if the settlement record is gone.
+ *  4. A settlement with no ledger row behind it is counted at its settled
+ *     amount. This is the case that matters most: a payment that settled on
+ *     chain but was never judged.
  *
- * Settlements already represented in the ledger are counted once: a
- * settlement is marked `logged` when a ledger row consumes it, and only the
- * unlogged ones are added here.
+ * Why not "ledger + settlements where logged === false" (the previous rule):
+ * `logged` is a cache hint flipped by the judge, not an accounting fact. A
+ * settlement marked logged whose ledger row was never written — because the
+ * judge crashed or the process died — was counted NOWHERE: the settlement
+ * says it is logged so it was skipped, and the ledger had no row to be
+ * counted. The weekly cap silently lost 0.05 USDC in exactly that state.
+ * Reconciling by transaction hash cannot lose that money.
+ *
+ * The payment and the tip of a ledger row are reconciled SEPARATELY: a row
+ * can carry both, and one of the two may be covered by a settlement while
+ * the other is not.
  */
 function weekSpend(): number {
   const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
-  let fromLedger = 0;
+
+  type SettlementRow = {
+    ts: string;
+    provider?: string;
+    amountUsdc?: number;
+    txHash?: string;
+    kind?: "commission" | "tip";
+    logged?: boolean;
+  };
+  type LedgerRow = {
+    ts: string;
+    provider?: string;
+    paidAmount?: number;
+    tipUsdc?: number;
+    txHash?: string;
+    tipTxHash?: string;
+  };
+
+  let settlements: SettlementRow[] = [];
   try {
-    const rows = JSON.parse(fs.readFileSync(LEDGER_PATH, "utf8")) as {
-      ts: string;
-      paidAmount?: number;
-      tipUsdc?: number;
-    }[];
-    fromLedger = rows
-      .filter((r) => new Date(r.ts).getTime() >= cutoff)
-      .reduce((s, r) => s + (r.paidAmount ?? 0) + (r.tipUsdc ?? 0), 0);
+    const parsed = JSON.parse(fs.readFileSync(SETTLEMENTS_FILE, "utf8"));
+    if (Array.isArray(parsed)) settlements = parsed as SettlementRow[];
   } catch {
-    fromLedger = 0;
+    settlements = [];
   }
 
-  // Payments that settled but are not yet in a ledger row.
-  let unlogged = 0;
+  let ledger: LedgerRow[] = [];
   try {
-    const settlements = JSON.parse(
-      fs.readFileSync(SETTLEMENTS_FILE, "utf8"),
-    ) as { ts: string; amountUsdc?: number; logged?: boolean }[];
-    if (Array.isArray(settlements)) {
-      unlogged = settlements
-        .filter(
-          (s) =>
-            !s.logged &&
-            typeof s.amountUsdc === "number" &&
-            new Date(s.ts).getTime() >= cutoff,
-        )
-        .reduce((s, r) => s + (r.amountUsdc ?? 0), 0);
+    const parsed = JSON.parse(fs.readFileSync(LEDGER_PATH, "utf8"));
+    if (Array.isArray(parsed)) ledger = parsed as LedgerRow[];
+  } catch {
+    ledger = [];
+  }
+
+  const timeOf = (ts?: string) => {
+    if (typeof ts !== "string") return NaN;
+    const t = new Date(ts).getTime();
+    return Number.isNaN(t) ? NaN : t;
+  };
+  const inWindow = (ts?: string) => {
+    const t = timeOf(ts);
+    return !Number.isNaN(t) && t >= cutoff;
+  };
+
+  // Index settlements by transaction hash (lowercased).
+  const byHash = new Map<string, SettlementRow>();
+  for (const s of settlements) {
+    if (s.txHash) byHash.set(s.txHash.toLowerCase(), s);
+  }
+
+  // A settlement is "consumed" once a ledger row accounts for it.
+  const consumed = new Set<SettlementRow>();
+
+  /**
+   * Find the settlement that a ledger component refers to.
+   *
+   * Primary key is the transaction hash. The fallback is for ledger rows
+   * written before the settlement record existed: same amount, within a
+   * minute, same kind, and — when the row names a provider — the same
+   * provider. Only an UNIQUE candidate is accepted: an ambiguous match
+   * would risk pairing two different payments, which would UNDER-count the
+   * cap. When the match is ambiguous the ledger row is counted on its own
+   * and the settlement is counted separately, which over-counts — the safe
+   * direction for a cap.
+   */
+  const findSettlement = (
+    txHash: string | undefined,
+    provider: string | undefined,
+    amount: number,
+    at: number,
+    wantTip: boolean,
+  ): SettlementRow | undefined => {
+    if (txHash) {
+      const hit = byHash.get(txHash.toLowerCase());
+      if (hit) return hit;
     }
-  } catch {
-    unlogged = 0;
+    if (Number.isNaN(at) || !(amount > 0)) return undefined;
+    const candidates = settlements.filter((s) => {
+      if (consumed.has(s)) return false;
+      if (provider && (s.provider ?? "") !== provider) return false;
+      if (typeof s.amountUsdc !== "number") return false;
+      if (Math.abs(s.amountUsdc - amount) > 1e-9) return false;
+      const isTip = (s.kind ?? "commission") === "tip";
+      if (isTip !== wantTip) return false;
+      const st = timeOf(s.ts);
+      if (Number.isNaN(st)) return false;
+      return Math.abs(st - at) <= 60_000;
+    });
+    return candidates.length === 1 ? candidates[0] : undefined;
+  };
+
+  let total = 0;
+
+  // ── Ledger rows ────────────────────────────────────────────────────────
+  for (const r of ledger) {
+    const at = timeOf(r.ts);
+
+    // The payment.
+    if ((r.paidAmount ?? 0) > 0) {
+      const s = findSettlement(
+        r.txHash,
+        r.provider,
+        r.paidAmount ?? 0,
+        at,
+        false,
+      );
+      if (s) {
+        consumed.add(s);
+        // The settled amount wins over the ledger's recorded amount.
+        if (inWindow(s.ts)) total += s.amountUsdc ?? 0;
+      } else if (inWindow(r.ts)) {
+        total += r.paidAmount ?? 0;
+      }
+    }
+
+    // The tip.
+    if ((r.tipUsdc ?? 0) > 0) {
+      const s = findSettlement(
+        r.tipTxHash,
+        r.provider,
+        r.tipUsdc ?? 0,
+        at,
+        true,
+      );
+      if (s) {
+        consumed.add(s);
+        if (inWindow(s.ts)) total += s.amountUsdc ?? 0;
+      } else if (inWindow(r.ts)) {
+        total += r.tipUsdc ?? 0;
+      }
+    }
   }
 
-  return fromLedger + unlogged;
+  // ── Settlements no ledger row accounts for ────────────────────────────
+  // Money that left the wallet but never reached the ledger. It is counted
+  // at the amount that actually settled.
+  for (const s of settlements) {
+    if (consumed.has(s)) continue;
+    if (typeof s.amountUsdc !== "number") continue;
+    if (!inWindow(s.ts)) continue;
+    total += s.amountUsdc;
+  }
+
+  return total;
 }
 
 function budgetGuard(kind: "commission" | "tip", amount: number) {
@@ -498,7 +622,12 @@ export const coreTools: Tool[] = [
       // The settled amount is CODE-recorded at settlement time, not
       // LLM-reported. Prefer the real settlement record; fall back to what
       // the model claims only if no settlement was recorded at all.
-      const settlement = await takeUnloggedSettlement(provider_name);
+      //
+      // PEEK, do not take: the settlement is only marked `logged` after the
+      // ledger row below has actually been written. Marking it first would
+      // mean a failure between here and the write leaves a payment that no
+      // longer appears in either file's count.
+      const settlement = await peekUnloggedSettlement(provider_name);
       const paidAmount = settlement
         ? settlement.amountUsdc
         : (claimedPaid ?? 0);
@@ -515,6 +644,13 @@ export const coreTools: Tool[] = [
         ...(txHash ? { txHash } : {}),
         tipUsdc: 0,
       });
+
+      // The ledger row exists now, so the settlement is represented in the
+      // ledger and can be marked as consumed.
+      if (settlement?.txHash) {
+        await markSettlementLogged(settlement.txHash);
+      }
+
       return {
         provider: provider_name,
         ...judgement,

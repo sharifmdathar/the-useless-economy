@@ -145,6 +145,138 @@ async function main() {
     { spend: await testWeekSpend() },
   );
 
+  // ── The orphan case ────────────────────────────────────────────────────
+  // A settlement marked `logged` whose ledger row was never written (the
+  // judge crashed, or the process died between settling and judging).
+  //
+  // The old rule was "ledger + settlements where logged === false", which
+  // counted this payment NOWHERE: the settlement says it is logged so it is
+  // skipped, and the ledger has no row so it is not there either. The
+  // weekly cap silently lost 0.05 USDC in exactly this state in the wild.
+  fs.writeFileSync(LEDGER, "[]");
+  fs.writeFileSync(
+    SETTLEMENTS,
+    JSON.stringify([
+      {
+        ts: now,
+        provider: "soleil",
+        kind: "commission",
+        amountUsdc: 0.05,
+        txHash: "0xorphan",
+        logged: true,
+      },
+    ]),
+  );
+  check(
+    "a logged settlement with no ledger row still counts (orphan)",
+    Math.abs((await testWeekSpend()) - 0.05) < 1e-9,
+    { spend: await testWeekSpend() },
+  );
+
+  // ── The stale-amount case ──────────────────────────────────────────────
+  // The ledger row says 0.04, the settlement says 0.05, and the chain moved
+  // 0.05. The settled amount must win, because that is the money that left
+  // the wallet.
+  fs.writeFileSync(
+    LEDGER,
+    JSON.stringify([
+      {
+        ts: now,
+        job: "sunset",
+        provider: "soleil",
+        paidAmount: 0.04,
+        txHash: "0xstale",
+      },
+    ]),
+  );
+  fs.writeFileSync(
+    SETTLEMENTS,
+    JSON.stringify([
+      {
+        ts: now,
+        provider: "soleil",
+        kind: "commission",
+        amountUsdc: 0.05,
+        txHash: "0xstale",
+        logged: true,
+      },
+    ]),
+  );
+  check(
+    "the settled amount wins over a stale ledger amount",
+    Math.abs((await testWeekSpend()) - 0.05) < 1e-9,
+    { spend: await testWeekSpend() },
+  );
+
+  // ── Per-component reconciliation ───────────────────────────────────────
+  // One ledger row carrying BOTH a payment and a tip. The payment tx is
+  // covered by a settlement; the tip tx is not. Treating the row as one
+  // unit would drop the uncovered tip.
+  fs.writeFileSync(
+    LEDGER,
+    JSON.stringify([
+      {
+        ts: now,
+        job: "sunset",
+        provider: "soleil",
+        paidAmount: 0.05,
+        txHash: "0xpaid",
+        tipUsdc: 0.005,
+        tipTxHash: "0xtip",
+      },
+    ]),
+  );
+  fs.writeFileSync(
+    SETTLEMENTS,
+    JSON.stringify([
+      {
+        ts: now,
+        provider: "soleil",
+        kind: "commission",
+        amountUsdc: 0.05,
+        txHash: "0xpaid",
+        logged: true,
+      },
+    ]),
+  );
+  check(
+    "a ledger row's uncovered tip still counts when its payment is covered",
+    Math.abs((await testWeekSpend()) - 0.055) < 1e-9,
+    { spend: await testWeekSpend() },
+  );
+
+  // ── A settlement and a ledger row for the SAME payment count once ──────
+  fs.writeFileSync(
+    LEDGER,
+    JSON.stringify([
+      {
+        ts: now,
+        job: "sunset",
+        provider: "soleil",
+        paidAmount: 0.05,
+        txHash: "0xpaid",
+      },
+    ]),
+  );
+  fs.writeFileSync(
+    SETTLEMENTS,
+    JSON.stringify([
+      {
+        ts: now,
+        provider: "soleil",
+        kind: "commission",
+        amountUsdc: 0.05,
+        txHash: "0xpaid",
+        logged: true,
+      },
+    ]),
+  );
+  check(
+    "a matched settlement and ledger row are counted once, not twice",
+    Math.abs((await testWeekSpend()) - 0.05) < 1e-9,
+    { spend: await testWeekSpend() },
+  );
+
   console.log(`\n${passed} passed, ${failed} failed`);
   if (failed > 0) throw new Error(`${failed} assertion(s) failed`);
   console.log("\nPASS: the spend cap sees every settled payment exactly once.");

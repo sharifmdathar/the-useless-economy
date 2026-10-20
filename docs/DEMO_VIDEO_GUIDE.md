@@ -272,9 +272,13 @@ Tips and commissions both resolve their destination in code:
 
 ### Hard caps (enforced in code, not in prompts)
 - **Per-job cap:** 0.05 USDC — `budgetGuard("commission", amount)` throws if exceeded.
-- **Weekly cap:** 1 USDC rolling 7 days — checked via `weekSpend()`, which sums
-  ledger rows **and** payments that settled on chain but whose ledger row has
-  not been written yet, so a payment that just left the wallet still counts.
+- **Weekly cap:** 1 USDC rolling 7 days — checked via `weekSpend()`, which
+  reconciles the ledger against the settlement records **by transaction
+  hash**. Every payment is counted exactly once, at the amount that actually
+  moved on chain. A payment that settled but was never judged is counted
+  from its settlement record; a ledger row whose settlement is missing is
+  counted from the ledger. `npm run repair:spend-history` re-reconciles both
+  files against the chain if they ever drift.
 - **Transfer caps:** `MAX_TRANSFER_USDC=100` per transfer, `MAX_DAILY_TRANSFER_USDC=500` per day.
 - **`KILL_SWITCH=1`** freezes commissions, tips, transfer-intent creation, and transfer execution immediately.
 

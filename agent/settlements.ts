@@ -80,6 +80,38 @@ export async function recordSettlement(
  * Only "commission" settlements are eligible: a tip is a gratuity, not the
  * price of the work, so it must never be reported as a deliverable's
  * paidAmount. Legacy rows with no `kind` are treated as commissions.
+ *
+ * NOTE: this does NOT mark the row as logged. The caller marks it with
+ * `markSettlementLogged()` only AFTER the ledger row has been written. If
+ * this function flipped the flag itself, a crash between here and the ledger
+ * write would leave a payment that is marked logged but has no ledger row —
+ * and the weekly cap (which reconciles the two files by transaction hash)
+ * would then have to decide whether to count it. Keeping the "claimed" and
+ * the "logged" steps separate makes the money countable in every state.
+ */
+export async function peekUnloggedSettlement(
+  provider: string,
+): Promise<Settlement | null> {
+  return serialized(() => {
+    const entries = readAll();
+    for (let i = entries.length - 1; i >= 0; i--) {
+      const row = entries[i];
+      const kind = row.kind ?? "commission";
+      if (row.provider === provider && !row.logged && kind === "commission") {
+        return row;
+      }
+    }
+    return null;
+  });
+}
+
+/**
+ * The most recent settlement for a provider that has not yet been written to
+ * a ledger row, marked as claimed.
+ *
+ * Prefer `peekUnloggedSettlement()` + `markSettlementLogged()`: this function
+ * marks the row before the ledger write, so a failure in between loses the
+ * payment from the ledger entirely.
  */
 export async function takeUnloggedSettlement(
   provider: string,
