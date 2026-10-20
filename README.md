@@ -121,15 +121,19 @@ USDC transfers, provider settlement, and tips all go through the x402 facilitato
 
 ## Demo Videos
 
-Demo links (replace with the published URLs once the videos are hosted):
+Every demo below is a real recording of this app — real prompts, real tool calls, real on-chain transactions on Base Sepolia.
 
-- **Week 1 (the-useless-economy.v1):** https://github.com/sharifmdathar/the-useless-economy/releases — initial setup, first gig run, first judge score.
-- **Week 2 (the-useless-economy.v2):** https://github.com/sharifmdathar/the-useless-economy/releases — natural-language transfers, the review card, approval, and on-chain settlement.
-- **Week 3 (the-useless-economy.v3):** https://github.com/sharifmdathar/the-useless-economy/releases — full x402 payment cycle, leaderboard, and roadmap.
+| Week | Demo |
+|---|---|
+| Week 1 (the-useless-economy.v1) | https://github.com/sharifmdathar/the-useless-economy/releases — setup, first gig run, first judge score. |
+| Week 2 (the-useless-economy.v2) | https://github.com/sharifmdathar/the-useless-economy/releases — natural-language transfer → review card → approval → on-chain settlement. |
+| Week 3 (the-useless-economy.v3) | https://github.com/sharifmdathar/the-useless-economy/releases — full x402 payment cycle, leaderboard, and roadmap. |
 
 Raw files live in `docs/`:
 - `docs/screenrecording-2026-10-16_23-56-10.mp4` — Week 1 walkthrough (67s, silent).
-- `docs/DEMO_VIDEO_GUIDE.md` — the Week 2 recording script (narration + shot list); the rendered file is added here once the capture is done.
+- `docs/demo-week2-transfers.mp4` — Week 2 narrated demo: the full transfer lifecycle, the browser-wallet path, and a cap rejection.
+- `docs/DEMO_VIDEO_GUIDE.md` — the Week 2 shot list and narration script the demo was cut from.
+- `docs/TWITTER_POSTS.md` — the three-per-week posting plan, each tagging `@riseinweb3`.
 
 ## Future Scope
 - **ERC‑721 / NFT** – mint and transfer an NFT with the same prompt→review→approve flow, Base Sepolia only. Deliberately deferred until the ERC‑20 transfer path was solid.

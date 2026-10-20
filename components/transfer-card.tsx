@@ -52,6 +52,7 @@ export function TransferCard({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [hashCopied, setHashCopied] = useState(false);
 
   const isPending = transfer.status === "pending";
   const isExecuted = transfer.status === "executed";
@@ -210,14 +211,31 @@ export function TransferCard({
       )}
 
       {isExecuted && transfer.txHash && (
-        <a
-          className="inline-flex items-center gap-1 font-mono text-xs text-primary underline underline-offset-4"
-          href={`https://sepolia.basescan.org/tx/${transfer.txHash}`}
-          target="_blank"
-          rel="noreferrer"
-        >
-          View transaction <ExternalLink className="size-3" />
-        </a>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="font-mono text-xs text-muted-foreground">
+            TX {transfer.txHash.slice(0, 10)}…{transfer.txHash.slice(-8)}
+          </span>
+          <button
+            type="button"
+            onClick={() => {
+              navigator.clipboard?.writeText(transfer.txHash!);
+              setHashCopied(true);
+              setTimeout(() => setHashCopied(false), 1500);
+            }}
+            className="inline-flex items-center gap-1 font-mono text-xs text-muted-foreground hover:text-foreground"
+            title="Copy transaction hash"
+          >
+            {hashCopied ? <Check className="size-3" /> : <Copy className="size-3" />}
+          </button>
+          <a
+            className="inline-flex items-center gap-1 font-mono text-xs text-primary underline underline-offset-4"
+            href={`https://sepolia.basescan.org/tx/${transfer.txHash}`}
+            target="_blank"
+            rel="noreferrer"
+          >
+            View transaction <ExternalLink className="size-3" />
+          </a>
+        </div>
       )}
 
       {transfer.reason && (

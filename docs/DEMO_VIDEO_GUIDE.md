@@ -1,3 +1,68 @@
+# Week 2 Demo Video Guide: "Natural-Language Transfers"
+
+**Video:** `docs/demo-week2-transfers.mp4` — 2:42, 1920×1080, H.264 + AAC, narrated.
+
+## Overview
+The agent is *told* to move money in plain English. The video shows the full
+two-phase lifecycle: the prompt, the code-enforced validation, the pending
+review card, the explicit approval, the on-chain settlement, the browser-wallet
+path, and a cap that the code refuses.
+
+Every frame is a genuine render of the running app (Playwright/Chromium against
+`localhost:3000`). Nothing is mocked except the injected EIP-1193 provider in
+scene 8, which stands in for MetaMask and never holds a key.
+
+## Scenes
+
+| # | Time | What is on screen |
+|---|---|---|
+| 1 | 0:00 | The app — Foreman chat, tool list, agent wallet address. |
+| 2 | 0:16 | Week 2 feature framing: transfers join the existing gig market. |
+| 3 | 0:29 | The prompt being typed: `send 1 USDC to 0x…dEaD`. |
+| 4 | 0:42 | The **TRANSFER REVIEW** card — amount, recipient, source, network, pending. |
+| 5 | 0:57 | Nothing signed yet: the intent is pending, awaiting approval. |
+| 6 | 1:11 | **APPROVE & SEND** pressed. |
+| 7 | 1:25 | **EXECUTED** — transaction hash and explorer link, now visible and copyable. |
+| 8 | 1:40 | The browser-wallet path: *FROM: Your connected browser wallet (you sign)*. The extension signs; the server only records the hash. |
+| 9 | 1:58 | The code refusing an over-cap transfer (500 USDC vs. a 100 USDC cap). |
+| 10 | 2:12 | The full tool surface, closing the demo. |
+
+## The transcript
+
+1. "The Useless Economy is an agent-to-agent gig market. Three AI providers do
+   pointless jobs. The Foreman hires them, judges them, and pays them."
+2. "Week two: the agent can be told to move money, in plain English."
+3. "You type: send one USDC to this address. No forms, no wallet plumbing."
+4. "The agent parses the token, the amount, and the recipient — then validates
+   all three in code. Not in the prompt. In code."
+5. "Here is the review card. Amount, recipient, source wallet, network. The
+   status is pending. Nothing has been signed. Nothing has been broadcast."
+6. "One click. Approve and send."
+7. "And it settles. Here is the transaction hash on Base Sepolia. Real USDC,
+   real chain, real receipt."
+8. "Or bring your own wallet. The card says: your connected browser wallet,
+   you sign. The extension signs the transaction. This app never sees a
+   private key — it only records the hash."
+9. "And the limits are not suggestions. Ask for five hundred USDC and the
+   code refuses, because the cap is one hundred. A prompt cannot raise a cap."
+10. "That is week two of The Useless Economy. Natural-language transfers with
+    an approval gate, on-chain on Base Sepolia. Built with RiseIn."
+
+## How it was made
+
+- Frames: `scripts` in the demo scratch dir — Playwright/Chromium, 1600×900 at 2×.
+- Voice: Piper TTS (local ONNX), one WAV per scene.
+- Assembly: ffmpeg — slow Ken Burns push per still, 0.45s cross-fades, AAC audio.
+
+## What proves it works
+
+- ✅ The transfer in scene 7 is a real on-chain USDC transfer (receipt status `0x1`).
+- ✅ The rejection in scene 9 is the real per-transfer cap firing in `agent/transfers.ts`.
+- ✅ The browser-wallet path produced a real ERC-20 `transfer` call through `window.ethereum`.
+- ✅ `npx tsc --noEmit` and `npm run build` both pass.
+
+---
+
 # Week 3 Demo Video Guide: "Give It A Wallet"
 
 **Video:** `docs/screenrecording-2026-10-16_23-56-10.mp4`

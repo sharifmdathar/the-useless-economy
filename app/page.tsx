@@ -29,6 +29,7 @@ import {
 } from "@/components/ui/collapsible";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { InlineMarkdown } from "@/components/inline-markdown";
 import {
   TransferCard,
   type TransferCardData,
@@ -354,7 +355,7 @@ export default function Home() {
                         {m.error && (
                           <CircleAlert className="mt-0.5 size-4 shrink-0" />
                         )}
-                        {m.text}
+                        <InlineMarkdown text={m.text} />
                       </div>
                     </div>
                   </div>
