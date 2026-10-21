@@ -11,7 +11,7 @@ An AI agent platform that connects a manager “Foreman” to three specialist p
 
 **Week 2 — natural-language transfers.** The Foreman can now also be *told* to move money. Ask it “send 1 USDC to 0x…” and the agent resolves the token, the amount, and the recipient, validates all three in code, and raises a **pending transfer intent**. Nothing is signed at that point. A review card appears in the chat; only after an explicit approval does the agent sign and broadcast, and the transaction hash is written back. Rejecting the card cancels the intent permanently.
 
-**Week 2 (advanced) — a deployed NFT contract the agent can call.** `contracts/UselessNFT.sol` is a self-contained ERC-721 with a small on-chain marketplace, so one deployment covers minting, buying and selling. The agent talks to it through five tools (`mint_nft`, `list_nfts`, `get_nft`, `list_nft_for_sale`, `buy_nft`), and the mint happens behind an **interactive card in the chat**: the user uploads an image, edits the name, the description and the traits, presses **Review** to see exactly what will be written on-chain, and only then presses **Mint NFT**. The metadata is written first and the tokenURI the contract stores points at it, so the token is never blank and never broken.
+**Week 2 (advanced) — an NFT contract the agent can call.** `contracts/UselessNFT.sol` is a self-contained ERC-721 with a small on-chain marketplace, so one deployment covers minting, buying and selling. The agent talks to it through five tools (`mint_nft`, `list_nfts`, `get_nft`, `list_nft_for_sale`, `buy_nft`), and the mint happens behind an **interactive card in the chat**: the user uploads an image, edits the name, the description and the traits, presses **Review** to see exactly what will be written on-chain, and only then presses **Mint NFT**. The metadata is written first and the tokenURI the contract stores points at it, so the token is never blank and never broken.
 
 > **Deployment status — read this before judging the NFT half.** The contract is written, compiled and **executed end to end against a real EVM** (`npm run test:nft`, `npm run test:nft-app`), and the whole app path — agent tool, chat card, HTTP route, on-chain mint, listing, purchase with USDC — is verified the same way. What is **not** done is the **Base Sepolia deployment**: both project wallets hold 0 testnet ETH and every reachable faucet is captcha-gated, so there is no gas to pay for a deployment. `npm run deploy:nft` is ready and needs ~0.001 Base Sepolia ETH in the agent wallet; it deploys, records the address in `.nft-contract.json`, and the app picks it up with no other change. Until that happens there is no Base Sepolia address to show, so the NFT demo video is not recorded.
 
@@ -68,7 +68,7 @@ Behaviour details that matter when configuring keys:
 
 ### Week 2 (advanced): the NFT contract and the in-chat mint
 
-The advanced half of the brief: a **deployed smart contract** the agent can invoke, plus a **small interactive interface in the chat** where the user supplies the image, the name, the description and the metadata, and then authorizes the mint.
+The advanced half of the brief: a **smart contract the agent can invoke** (`npm run deploy:nft` puts it on Base Sepolia), plus a **small interactive interface in the chat** where the user supplies the image, the name, the description and the metadata, and then authorizes the mint.
 
 **The contract** — `contracts/UselessNFT.sol` (solc 0.8.28, no external dependencies, so it compiles with a bare `solc`):
 
