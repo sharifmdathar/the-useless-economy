@@ -29,6 +29,7 @@
 import fs from "fs";
 import os from "os";
 import path from "path";
+import { randomBytes } from "node:crypto";
 
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), "user-wallet-test-"));
 const ORIGINAL_CWD = process.cwd();
@@ -52,9 +53,10 @@ function assert(cond: unknown, msg: string) {
 
 // The browser wallet signs with ITS OWN key, so the agent's key is
 // irrelevant here. Still point it at a throwaway so nothing can reach the
-// real wallet if the code under test does sign.
+// real wallet if the code under test does sign. The key is generated per
+// run and never written down, so no key material is committed.
 const THROWAWAY_KEY =
-  "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d" as const;
+  `0x${randomBytes(32).toString("hex")}` as `0x${string}`;
 
 let transfers: typeof import("../agent/transfers") = null!;
 let caps: { MAX_TRANSFER: number; MAX_DAILY_TRANSFER: number } = null!;
@@ -444,6 +446,65 @@ async function main() {
         threw = e instanceof Error ? e.message : String(e);
       }
       assert(threw !== "", "a released transfer must not accept a hash");
+    },
+  );
+
+  console.log("");
+  console.log("the agent's wallet may not sign a user-wallet transfer");
+
+  await check(
+    "executeAgentTransfer refuses a user_wallet transfer",
+    async () => {
+      writeRows([]);
+      const userFunded = await transfers.createPendingTransfer({
+        token: "USDC",
+        amount: 1,
+        recipient: RECIPIENT,
+        source: "user_wallet",
+      });
+      let threw = "";
+      try {
+        await transfers.executeAgentTransfer(userFunded.id);
+      } catch (e) {
+        threw = e instanceof Error ? e.message : String(e);
+      }
+      assert(threw !== "", "the agent wallet must not sign a user-wallet transfer");
+      assert(
+        threw.includes("own wallet"),
+        `expected a wrong-wallet refusal, got: ${threw}`,
+      );
+      const after = transfers.getTransfer(userFunded.id)!;
+      assert(!after.txHash, "no hash may be recorded");
+      assert(
+        after.status === "pending",
+        `the transfer must stay pending, got: ${after.status}`,
+      );
+    },
+  );
+
+  await check(
+    "executeAgentTransfer still signs an agent_wallet transfer",
+    async () => {
+      writeRows([]);
+      const agentFunded = await transfers.createPendingTransfer({
+        token: "USDC",
+        amount: 1,
+        recipient: RECIPIENT,
+        source: "agent_wallet",
+      });
+      // The throwaway key holds no funds, so the chain call fails and the
+      // transfer is marked failed — but it was ATTEMPTED, which is what
+      // this asserts. The point is that the source guard did not block it.
+      let threw = "";
+      try {
+        await transfers.executeAgentTransfer(agentFunded.id);
+      } catch (e) {
+        threw = e instanceof Error ? e.message : String(e);
+      }
+      assert(
+        !threw.includes("own wallet"),
+        `the agent-wallet path must not be blocked by the source guard, got: ${threw}`,
+      );
     },
   );
 

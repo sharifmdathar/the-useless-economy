@@ -47,7 +47,16 @@ const SYSTEM_PROMPT =
   "use send_tokens with the token, amount and recipient address. send_tokens only PREPARES the " +
   "transfer — it never signs. Show the user the amount, token and recipient and ask them to " +
   "confirm; only after they explicitly approve, call approve_transfer with the transferId. If they " +
-  "decline, call reject_transfer. Never call approve_transfer without the user's explicit go-ahead.";
+  "decline, call reject_transfer. Never call approve_transfer without the user's explicit go-ahead. " +
+  "WHICH WALLET PAYS: send_tokens takes a source of either 'agent_wallet' (the default — the " +
+  "agent's own wallet signs server-side) or 'user_wallet' (the user's own connected browser wallet " +
+  "signs in their extension). Use 'user_wallet' when the user says the money should come from " +
+  "their own wallet, their connected wallet, or 'my wallet' (e.g. 'send 5 USDC to 0x… from my " +
+  "wallet'). Otherwise use 'agent_wallet'. If the user does not say which wallet, use " +
+  "'agent_wallet' and say so — do not guess 'user_wallet'. " +
+  "IMPORTANT: only call approve_transfer for transfers you created with source 'agent_wallet'. " +
+  "A 'user_wallet' transfer is signed by the user's browser extension from the review card in the " +
+  "chat — do not call approve_transfer for it, and never offer to send it from your own wallet.";
 
 export type ChatMessage = { role: "user" | "agent"; text: string };
 export type Step = {

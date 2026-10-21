@@ -302,6 +302,16 @@ export async function executeAgentTransfer(
   if (row.status !== "pending" && row.status !== "approved") {
     throw new Error(`Transfer ${id} is ${row.status}, not pending.`);
   }
+  // Only the agent's own wallet may be spent here. A transfer the user
+  // asked to fund from THEIR wallet has to be signed by their extension;
+  // if the server signed it instead, the wrong money would move — the
+  // agent's USDC would be spent on the user's behalf, and the user's
+  // wallet would never have authorized anything.
+  if (row.source !== "agent_wallet") {
+    throw new Error(
+      `Transfer ${id} is funded by the user's own wallet, so the browser wallet must sign it. The agent's wallet was not used.`,
+    );
+  }
   // A transfer created before the switch was flipped must not still settle.
   if (process.env.KILL_SWITCH === "1") {
     throw new Error(

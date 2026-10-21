@@ -15,6 +15,7 @@
  * never touched, and no transaction is ever broadcast.
  */
 import { spawn } from "child_process";
+import crypto from "crypto";
 import fs from "fs";
 import os from "os";
 import path from "path";
@@ -72,8 +73,10 @@ async function main() {
       NODE_ENV: "production",
       MAX_TRANSFER_USDC: "10",
       MAX_DAILY_TRANSFER_USDC: "25",
-      WALLET_PRIVATE_KEY:
-        "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d",
+      // A throwaway key, generated per run. It is never funded and never
+      // used to sign anything here — the browser path is server-side only
+      // in this test — but the server refuses to boot without one.
+      WALLET_PRIVATE_KEY: `0x${crypto.randomBytes(32).toString("hex")}`,
     },
     stdio: ["ignore", "pipe", "pipe"],
   });

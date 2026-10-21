@@ -1270,6 +1270,19 @@ export const transferTools: Tool[] = [
           `Transfer ${transfer_id} is ${pending.status} and cannot be approved.`,
         );
       }
+      // A transfer the user asked to fund from THEIR wallet must be
+      // signed by their browser extension. The agent's wallet may not
+      // stand in for it — that would spend the agent's money without the
+      // user's wallet ever authorizing anything.
+      if (pending.source !== "agent_wallet") {
+        return {
+          transferId: transfer_id,
+          status: pending.status,
+          source: pending.source,
+          note:
+            "This transfer is funded by the user's own connected wallet, so it is signed in the browser, not by the agent. Ask the user to approve it in the chat review card — the browser wallet will sign it.",
+        };
+      }
       const result = await executeAgentTransfer(transfer_id);
       if (result.status === "failed") {
         return {
