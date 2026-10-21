@@ -110,3 +110,54 @@
   `demo-video-guide-w2.md` draft, and the `lib/judge.ts` edits (moot — file
   deleted). Commit early; `.next` was the only reason this came back.
 
+- **2026-10-21 — Week 2 advanced: the NFT contract (UselessNFT.sol):** the
+  advanced brief asks for a DEPLOYED smart contract the agent can call through
+  its own tools, plus an in-chat interface where the user uploads an image,
+  enters a name, a description and metadata, and then authorizes the mint.
+  Written as `contracts/UselessNFT.sol` — a self-contained ERC-721 with a
+  small on-chain marketplace, so ONE deployment covers minting, buying and
+  selling. Two choices worth recording:
+  (a) NO OpenZeppelin dependency. The contract imports nothing, so it
+  compiles with a bare `solc` and deploys from a plain Node script.
+  (b) Payment is a plain ERC-20 `transferFrom`, not EIP-3009. The contract
+  pulls the USDC itself, so it has no opinion about how the buyer authorised
+  the spend, and the marketplace half works with any wallet that can sign an
+  `approve`.
+  The contract enforces two rules itself rather than trusting the app: only
+  the MINTER may mint, and the USDC transfer is the LAST thing `buy()` does —
+  if the payment fails the whole transaction reverts, so a token can never
+  change hands without the money moving.
+- **2026-10-21 — The mint keeps the transfer's two-phase shape:** `mint_nft`
+  files a PENDING intent and the chat renders an interactive card; nothing is
+  signed until the user presses Mint. The reason is the same one as the
+  transfers: the model reads "mint an NFT called X" well and guesses what the
+  user wanted the NFT to LOOK like badly. The card (upload, name, description,
+  traits, review, mint) is the interface the brief asks for.
+- **2026-10-21 — The image is downscaled in the browser:** the metadata is
+  stored on-chain as a URI and served by this app, so the image is embedded as
+  a data URI and its SIZE becomes a cost. The card draws the upload onto a
+  canvas at most 512px on its long edge and re-encodes it as JPEG, stepping
+  the quality down until it fits ~180 KB. A 4 MB screenshot therefore never
+  becomes a 4 MB request body.
+- **2026-10-21 — The tokenURI points at the app's own API, not at IPFS:** the
+  metadata document is written to disk when the mint is approved (before the
+  contract call, so a failed mint can be retried without re-uploading), and the
+  tokenURI is `${APP_URL}/api/nfts/<mintId>`. The document embeds the image,
+  so it is self-contained: one fetch returns the metadata AND the picture.
+  IPFS/Arweave pinning is the production answer and is in Future Scope; it
+  was skipped because it needs a pinning API key this repo does not have, and
+  a token whose URI 404s is worse than a token whose URI points at a server
+  that is still running.
+- **2026-10-21 — The contract is NOT deployed on Base Sepolia:** both project
+  wallets hold 0 testnet ETH and every reachable faucet (portal.base.org,
+  Chainlink, dRPC, QuickNode, Tenderly, thirdweb, the CDP faucet) is
+  captcha- or account-gated, so there is no gas to pay for a deployment. The
+  code path is complete and `npm run deploy:nft` is ready; it needs about
+  0.001 Base Sepolia ETH in the agent wallet and nothing else. Rather than
+  ship an unverified contract, the whole thing was executed against a LOCAL
+  EVM (ganache) — `npm run test:nft` proves the contract's own rules, and
+  `npm run test:nft-app` drives the app's own `agent/nft.ts` through
+  file -> approve -> mint -> list -> buy, with the real contract and the real
+  viem calls. The mock USDC is placed at the canonical Base Sepolia USDC
+  address with `evm_setAccountCode`, so the app's hard-coded address resolves
+  with no test-only branch in the app itself.

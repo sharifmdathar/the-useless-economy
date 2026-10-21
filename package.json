@@ -31,7 +31,12 @@
     "test:user-wallet": "node --experimental-strip-types scripts/run-test.ts scripts/test-user-wallet-path.ts",
     "test:user-wallet-http": "node --experimental-strip-types scripts/run-test.ts scripts/test-user-wallet-http.ts",
     "repair:spend-history": "node --experimental-strip-types scripts/run-test.ts scripts/repair-spend-history.ts",
-    "verify:tx": "node --experimental-strip-types scripts/run-test.ts scripts/verify-single-settlement-tx.ts"
+    "verify:tx": "node --experimental-strip-types scripts/run-test.ts scripts/verify-single-settlement-tx.ts",
+    "compile:nft": "node scripts/compile-nft.mjs",
+    "deploy:nft": "node scripts/run-test.ts scripts/deploy-nft.ts",
+    "test:nft": "node scripts/test-nft-contract.mjs",
+    "test:nft-app": "node scripts/run-test.ts scripts/test-nft-app.ts",
+    "test:nft-tools": "node scripts/run-test.ts scripts/test-nft-tools.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.8.0",
@@ -52,6 +57,8 @@
     "@types/node": "^24.19.0",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
+    "ganache": "^7.9.2",
+    "solc": "^0.8.28",
     "tailwindcss": "^4.3.3",
     "typescript": "^5.9.3"
   },

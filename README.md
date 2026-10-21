@@ -11,6 +11,10 @@ An AI agent platform that connects a manager “Foreman” to three specialist p
 
 **Week 2 — natural-language transfers.** The Foreman can now also be *told* to move money. Ask it “send 1 USDC to 0x…” and the agent resolves the token, the amount, and the recipient, validates all three in code, and raises a **pending transfer intent**. Nothing is signed at that point. A review card appears in the chat; only after an explicit approval does the agent sign and broadcast, and the transaction hash is written back. Rejecting the card cancels the intent permanently.
 
+**Week 2 (advanced) — a deployed NFT contract the agent can call.** `contracts/UselessNFT.sol` is a self-contained ERC-721 with a small on-chain marketplace, so one deployment covers minting, buying and selling. The agent talks to it through five tools (`mint_nft`, `list_nfts`, `get_nft`, `list_nft_for_sale`, `buy_nft`), and the mint happens behind an **interactive card in the chat**: the user uploads an image, edits the name, the description and the traits, presses **Review** to see exactly what will be written on-chain, and only then presses **Mint NFT**. The metadata is written first and the tokenURI the contract stores points at it, so the token is never blank and never broken.
+
+> **Deployment status — read this before judging the NFT half.** The contract is written, compiled and **executed end to end against a real EVM** (`npm run test:nft`, `npm run test:nft-app`), and the whole app path — agent tool, chat card, HTTP route, on-chain mint, listing, purchase with USDC — is verified the same way. What is **not** done is the **Base Sepolia deployment**: both project wallets hold 0 testnet ETH and every reachable faucet is captcha-gated, so there is no gas to pay for a deployment. `npm run deploy:nft` is ready and needs ~0.001 Base Sepolia ETH in the agent wallet; it deploys, records the address in `.nft-contract.json`, and the app picks it up with no other change. Until that happens there is no Base Sepolia address to show, so the NFT demo video is not recorded.
+
 **Week 3 — the agent gets its own wallet.** The Foreman carries its own Base Sepolia wallet and spends from it: it commissions providers over x402, tips them on-chain, and leaves a receipt for every payment. The wallet holds no ETH — the x402 facilitator relays the USDC settlement and pays the gas.
 
 The Foreman is a tool‑calling loop (`agent/agent.ts`, max 10 steps): it sends the conversation plus the tool schemas to the model, runs whatever tools come back, feeds the results into the next turn, and stops when the model answers in text. The loop speaks the OpenAI wire format (`tool_calls` / `role: "tool"`) because Groq is OpenAI‑compatible, and translates to Gemini’s `Content` parts on the Gemini path — so the same tool schemas drive either provider unchanged.
@@ -25,9 +29,10 @@ The Foreman is a tool‑calling loop (`agent/agent.ts`, max 10 steps): it sends 
 | AI Engine | Provider adapter: Gemini (`@google/genai`) + Groq (OpenAI‑compatible HTTP) | ^2.24.0 / `fetch` |
 | Wallet / x402 | viem (EIP‑3009 `transferWithAuthorization`) | ^2.56.9 |
 | Gas Sponsorship | x402 facilitator (`https://x402.org/facilitator`), network `eip155:84532`, protocol v2 | HTTP v2 |
+| Smart Contract | `contracts/UselessNFT.sol` — ERC‑721 + marketplace, compiled with solc | solc 0.8.28 |
 | Browser Wallet | EIP‑1193 injected provider (`window.ethereum`) — MetaMask / Rabby / Brave | — |
-| Storage | Local append‑only JSON (`ledger.json`, `settlements.json`, `.transfers.json`, `report.md`, `.provider-status.json`) | — |
-| Tooling | TypeScript `tsc --noEmit`; no test framework is installed | ^5.9.3 |
+| Storage | Local append‑only JSON (`ledger.json`, `settlements.json`, `.transfers.json`, `.nft-mints.json`, `.nfts/`, `report.md`, `.provider-status.json`) | — |
+| Tooling | TypeScript `tsc --noEmit`; ganache for the local-EVM contract tests; no test framework is installed | ^5.9.3 / ^7.9.2 |
 | Runtime | Node.js | >=20 |
 
 ## Supported AI Models
@@ -59,6 +64,60 @@ Behaviour details that matter when configuring keys:
 - **Grounded Standings** – the scores shown in the chat are derived in code from the recorded `run_gig_economy` result and rendered as a table, so the summary can never contradict the tool output.
 - **Weekly Report** – “State of the Useless Economy” summarises scores, leaderboard, spend, and incidents into `report.md`.
 - **Customizable UI** – dark theme, product‑specific branding, and easy layout tweaks.
+- **NFT Contract + In‑Chat Mint** – `contracts/UselessNFT.sol` is a self‑contained ERC‑721 with a small marketplace (mint, list, buy), driven by five agent tools. The mint happens behind an interactive card in the chat: upload an image, edit the name, the description and the traits, review the exact metadata that will be written on‑chain, then press **Mint NFT**. Only the minter can mint, and the USDC payment is the last thing the contract does, so a token can never change hands without the money moving.
+
+### Week 2 (advanced): the NFT contract and the in-chat mint
+
+The advanced half of the brief: a **deployed smart contract** the agent can invoke, plus a **small interactive interface in the chat** where the user supplies the image, the name, the description and the metadata, and then authorizes the mint.
+
+**The contract** — `contracts/UselessNFT.sol` (solc 0.8.28, no external dependencies, so it compiles with a bare `solc`):
+
+| Function | What it does |
+|---|---|
+| `mint(to, tokenURI)` | Mints a token. **Only the minter** (the agent's wallet) may call it. |
+| `listForSale(tokenId, price)` | Puts a token on the market, priced in USDC base units. |
+| `cancelListing(tokenId)` | Takes it off the market. Only the seller may. |
+| `buy(tokenId)` | Pulls the USDC from the buyer, moves the token, closes the listing. |
+| `tokenInfo(tokenId)` / `listingOf(tokenId)` / `listedTokenIds()` | Reads. |
+| `approve` / `setApprovalForAll` / `transferFrom` / `safeTransferFrom` | Ordinary ERC‑721 surface. |
+
+Two rules the contract enforces, not the app: **only the minter mints**, and **the USDC transfer is the last thing that happens** — if the payment fails the whole transaction reverts, so a token can never change hands without the money moving.
+
+**The mint card** — `components/nft-mint-card.tsx`, rendered inside the chat next to the `mint_nft` tool call:
+
+![the NFT mint card in the chat](docs/nft-mint-card.png)
+
+1. The agent files a pending intent (`mint_nft`). Nothing is signed.
+2. The card appears: image upload, name, description, and a traits editor (add/remove rows).
+3. The uploaded image is **downscaled in the browser** to 512px on its long edge and re-encoded as JPEG, so a 4 MB screenshot cannot become a 4 MB request body.
+4. **Review** shows the exact metadata document that will be stored, the image size, and the recipient.
+
+![the review step](docs/nft-mint-card-review.png)
+
+5. **Mint NFT** writes the metadata and calls the contract's `mint()`. The card then shows the token id, the recipient, the tokenURI and the transaction hash with an explorer link.
+
+![the minted state](docs/nft-mint-card-minted.png)
+
+> These three screenshots are real captures of the running app (Playwright/Chromium), driven through the local EVM the test harness boots — the card, the tool call and the state transitions are the production code paths. The only thing that differs from Base Sepolia is the chain the contract is deployed on.
+
+**Where the metadata lives** — the metadata document is written to disk when the mint is approved, with the image embedded as a data URI, and the tokenURI stored on-chain is `${APP_URL}/api/nfts/<mintId>`. That route serves the document back, so fetching a token's URI returns the metadata *and* the picture in one self-contained response. (Production would pin this to IPFS/Arweave; see Future Scope.)
+
+**Code-enforced caps**
+
+| Limit | Default | Env override |
+|---|---|---|
+| Per NFT purchase | `0.25` USDC | `MAX_NFT_PRICE_USDC` |
+| Kill switch | off | `KILL_SWITCH=1` freezes minting, listing and buying |
+
+The NFT ceiling is separate from the transfer ceiling and from the economy's weekly cap: an NFT purchase is agent spend, but it is a different kind of spend, so it gets its own limit rather than being folded into either.
+
+**The API**
+
+| Endpoint | Method | Purpose |
+|---|---|---|
+| `/api/nft` | `GET` | Deployment status, every mint intent, the pending ones |
+| `/api/nft` | `POST` | `create` a pending intent, `approve` it (writes metadata + mints), or `reject` it |
+| `/api/nfts/[id]` | `GET` | The ERC‑721 metadata document — the tokenURI's target |
 
 ### Week 3: The agent gets its own wallet
 
@@ -172,6 +231,7 @@ switched chain id against the constant.
 | Group | Tools |
 |---|---|
 | Transfers (Week 2) | `send_tokens`, `approve_transfer`, `reject_transfer`, `list_transfers` |
+| NFT contract (Week 2 advanced) | `mint_nft`, `list_nfts`, `get_nft`, `list_nft_for_sale`, `buy_nft` |
 | Persona (free) | `rate_sunset`, `count_pigeons`, `pirate_translate` |
 | Judge / ledger | `judge_deliverable`, `log_to_ledger`, `read_ledger`, `generate_report` |
 | Workflow | `run_gig_economy` (all three providers + 3 judgements + ranking in one call) |
@@ -182,6 +242,12 @@ switched chain id against the constant.
 ## Demo Videos
 
 Every demo below is a real recording of this app — real prompts, real tool calls, real on-chain transactions on Base Sepolia. All three are narrated.
+
+```
+Week 1 (the-useless-economy.v1): https://raw.githubusercontent.com/sharifmdathar/the-useless-economy/main/docs/demo-week1-gig-economy.mp4
+Week 2 (the-useless-economy.v2): https://raw.githubusercontent.com/sharifmdathar/the-useless-economy/main/docs/demo-week2-transfers.mp4
+Week 3 (the-useless-economy.v3): https://raw.githubusercontent.com/sharifmdathar/the-useless-economy/main/docs/demo-week3-wallet.mp4
+```
 
 | Week | Demo |
 |---|---|
@@ -196,8 +262,12 @@ Raw files live in `docs/`:
 - `docs/DEMO_VIDEO_GUIDE.md` — the shot lists and narration scripts the demos were cut from.
 - `docs/TWITTER_POSTS.md` — the three-per-week posting plan, each tagging `@riseinweb3`.
 
+**The NFT demo is not recorded yet.** The Week 2 video above covers the transfer half of the task, which is the core requirement. The NFT half — the mint card, the contract call, the listing and the purchase — has no video because the contract is not deployed on Base Sepolia yet (see the deployment note near the top of this README). The feature is verified end to end against a local EVM instead, and `npm run deploy:nft` plus a short capture is all that stands between it and a narrated demo.
+
 ## Future Scope
-- **ERC‑721 / NFT** – mint and transfer an NFT with the same prompt→review→approve flow, Base Sepolia only. Deliberately deferred until the ERC‑20 transfer path was solid.
+- **Deploy `UselessNFT` on Base Sepolia** – the contract is written, compiled and tested; it needs ~0.001 testnet ETH for gas, then `npm run deploy:nft` and a narrated demo.
+- **IPFS / Arweave pinning** – the tokenURI currently points at the app's own `/api/nfts/<id>` route with the image embedded as a data URI. Pinning the metadata would make the token permanently resolvable without this server.
+- **Royalties** – `EIP-2981` secondary-sale royalties on the marketplace half of the contract.
 - **Multi‑signature approvals** – a transfer above a high‑water mark requires two approvals (agent + user) before it settles.
 - **ZK Integration** – add Zero‑Knowledge proofs for confidential job descriptions.
 - **Multi‑Chain Support** – extend beyond Base Sepolia to mainnet (requires extra bridges).
@@ -239,6 +309,11 @@ Provider routes run free unless `PAYWALL=1`, which makes them answer a real x402
 > **The agent wallet does not need ETH.** USDC transfers, x402 settlement, and
 > tips are all relayed by the x402 facilitator, which pays the gas. Only
 > native ETH transfers need testnet ETH on the agent wallet.
+>
+> **The NFT contract does need it.** `mint()` is a regular contract call, so
+> the wallet that calls it pays the gas — that is the agent's wallet, and a
+> deployment needs gas too. Fund the agent wallet with a little Base Sepolia
+> ETH and run `npm run deploy:nft`; nothing else changes.
 
 ### Trying a transfer
 
@@ -280,6 +355,28 @@ JITI_TSCONFIG_PATHS=true node_modules/.bin/jiti scripts/test-tip-settlement.ts
 JITI_TSCONFIG_PATHS=true node_modules/.bin/jiti scripts/test-standings-grounding.ts
 ```
 
+NFT verification (no testnet gas needed — these run against a local EVM):
+
+```bash
+# compile contracts/UselessNFT.sol and refresh the committed artifacts
+npm run compile:nft
+
+# the contract itself: mint -> list -> approve -> buy, plus the revert paths
+npm run test:nft
+
+# the app layer: the same agent/nft.ts the app runs, end to end on a local chain
+npm run test:nft-app
+
+# the tools the model calls, driven directly
+npm run test:nft-tools
+```
+
+Deploying the contract to Base Sepolia (needs ~0.001 testnet ETH in the agent wallet):
+
+```bash
+npm run deploy:nft
+```
+
 Regression suite for the exactly-once payment guarantee (no network needed
 for the first one; the rest settle real testnet USDC):
 
@@ -316,9 +413,13 @@ All of it lives in `.env` (see `.env.example`):
 | `PROVIDER_PAY_TO_OVERRIDE` | unset | Force one payout address (the funded provider wallet is used by default) |
 | `MAX_TRANSFER_USDC` | `100` | Per‑transfer ceiling for user-initiated transfers |
 | `MAX_DAILY_TRANSFER_USDC` | `500` | Rolling 24h ceiling across all user-initiated transfers |
+| `MAX_NFT_PRICE_USDC` | `0.25` | Per‑purchase ceiling for an NFT the agent buys |
+| `APP_URL` | `http://localhost:3000` | The host the tokenURI points at |
+| `NFT_CONTRACT_ADDRESS` | — | Overrides the deployed UselessNFT address |
+| `NFT_RPC_URL` / `NFT_CHAIN_ID` | — / `84532` | Point the NFT desk at another chain (used by the local-EVM tests) |
 | `X402_FACILITATOR_URL` | `https://x402.org/facilitator` | Gas‑sponsoring facilitator used for USDC settlement |
 
-Generated at runtime and gitignored: `.agent-wallet.json`, `.provider-wallet.json`, `ledger.json`, `settlements.json`, `.transfers.json`, `.provider-status.json`, `report.md`.
+Generated at runtime and gitignored: `.agent-wallet.json`, `.provider-wallet.json`, `ledger.json`, `settlements.json`, `.transfers.json`, `.nft-mints.json`, `.nfts/`, `.nft-contract.json`, `.provider-status.json`, `report.md`.
 
 ## Contributing
 Contributions are welcome! Focus on:

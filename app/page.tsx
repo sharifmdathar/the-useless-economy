@@ -34,6 +34,10 @@ import {
   TransferCard,
   type TransferCardData,
 } from "@/components/transfer-card";
+import {
+  NftMintCard,
+  type NftMintCardData,
+} from "@/components/nft-mint-card";
 import { StandingsTableView } from "@/components/standings-table";
 import { cn } from "@/lib/utils";
 import type { StandingsTable } from "@/agent/standings";
@@ -44,6 +48,7 @@ type Message = {
   text: string;
   steps?: Step[];
   transfers?: TransferCardData[];
+  mints?: NftMintCardData[];
   standings?: StandingsTable;
   error?: boolean;
 };
@@ -119,6 +124,7 @@ export default function Home() {
               text: data.answer,
               steps: data.steps,
               transfers: data.transfers,
+              mints: data.mints,
               standings: data.standings,
             },
       ]);
@@ -359,6 +365,44 @@ export default function Home() {
                               ),
                             );
                           }}
+                        />
+                      ))}
+                      {m.mints?.map((mint) => (
+                        <NftMintCard
+                          key={mint.id}
+                          mint={mint}
+                          onMinted={(id, result) =>
+                            setMessages((prev) =>
+                              prev.map((msg) =>
+                                msg.mints?.some((x) => x.id === id)
+                                  ? {
+                                      ...msg,
+                                      mints: msg.mints.map((x) =>
+                                        x.id === id
+                                          ? { ...x, ...result }
+                                          : x,
+                                      ),
+                                    }
+                                  : msg,
+                              ),
+                            )
+                          }
+                          onRejected={(id) =>
+                            setMessages((prev) =>
+                              prev.map((msg) =>
+                                msg.mints?.some((x) => x.id === id)
+                                  ? {
+                                      ...msg,
+                                      mints: msg.mints.map((x) =>
+                                        x.id === id
+                                          ? { ...x, status: "rejected" }
+                                          : x,
+                                      ),
+                                    }
+                                  : msg,
+                              ),
+                            )
+                          }
                         />
                       ))}
                       <div

@@ -1,6 +1,7 @@
 import { MODEL, runAgent, ACTIVE_PROVIDER } from "@/agent/agent";
 import { tools } from "@/agent/tools";
 import { getTransfer } from "@/agent/transfers";
+import { getMint } from "@/agent/nft";
 import {
   standingsFromSteps,
   stripScoreClaims,
@@ -55,6 +56,16 @@ export async function POST(req: Request) {
       })
       .filter((t): t is NonNullable<typeof t> => t !== null);
 
+    // Same for a mint the agent prepared: the chat renders the mint card so
+    // the user can upload an image, edit the metadata and authorize it.
+    const mints = result.steps
+      .map((s) => {
+        const r = s.result as { mintId?: string } | undefined;
+        if (!r?.mintId) return null;
+        return getMint(r.mintId) ?? null;
+      })
+      .filter((m): m is NonNullable<typeof m> => m !== null);
+
     // The agent's closing answer is LLM prose. When the run was a gig
     // economy run, that prose sometimes misreports the scores the tool
     // actually recorded (it has been seen calling a 3 a five and inventing
@@ -69,6 +80,7 @@ export async function POST(req: Request) {
       ...result,
       answer,
       transfers: pending,
+      mints,
       ...(standings ? { standings } : {}),
     });
   } catch (err) {

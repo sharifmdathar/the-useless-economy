@@ -8,6 +8,9 @@ ledger.json
 settlements.json
 .transfers.json
 .provider-status.json
+.nft-mints.json
+.nft-contract.json
+.nfts/
 report.md
 *.log
 tsconfig.tsbuildinfo

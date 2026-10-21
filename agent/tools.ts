@@ -48,6 +48,18 @@ import {
   MAX_DAILY_TRANSFER,
 } from "@/agent/transfers";
 import { resolveToken, SUPPORTED_TOKENS } from "@/agent/tokens";
+import {
+  approveMint,
+  buyNft,
+  createPendingMint,
+  getNftContractAddress,
+  listMints,
+  listNftForSale,
+  listOnChainNfts,
+  nftStatus,
+  readNft,
+  tokenUriFor,
+} from "@/agent/nft";
 export { MODEL } from "@/lib/llm";
 
 const CHAIN_ID = 84532; // Base Sepolia — TESTNET ONLY
@@ -1368,11 +1380,182 @@ function buildParams(provider: string, job: string): string {
   return `location=${encodeURIComponent(job)}&request=${encodeURIComponent(job)}`;
 }
 
-/** The full tool surface the agent sees: free persona tools + judge/ledger + paid tools + transfers. */
+// ─── WEEK 2 (ADVANCED) TOOLS: the deployed NFT contract ─────────────────
+//
+// The brief's advanced ask: a deployed smart contract the agent can call
+// through its own tools, covering MINTING, BUYING and SELLING NFTs.
+//
+// The mint keeps the same two-phase shape as a transfer — `mint_nft` files a
+// PENDING intent and the human authorizes it from the chat card — because a
+// model is good at reading "mint an NFT called X" and bad at guessing what
+// the user wanted the NFT to look like. The listing and buying tools are
+// direct contract calls, capped in code.
+
+export const nftTools: Tool[] = [
+  {
+    name: "mint_nft",
+    description:
+      "Prepare an NFT mint on the deployed UselessNFT contract (Base Sepolia testnet). Validates the name, description, recipient and traits, then files a PENDING mint — NOTHING is minted until the user reviews it in the chat card and presses Mint. Params: name, optional description, optional recipient (defaults to the agent's wallet), optional traits (array of {trait_type, value}), optional prompt (the user's original words, for the audit trail).",
+    parameters: {
+      type: "object",
+      properties: {
+        name: {
+          type: "string",
+          description: "The NFT's name, e.g. 'Sunset Withdrawn From Service'",
+        },
+        description: {
+          type: "string",
+          description: "What the NFT is, in one or two sentences",
+        },
+        recipient: {
+          type: "string",
+          description:
+            "Who receives the token (0x address). Defaults to the agent's own wallet.",
+        },
+        traits: {
+          type: "array",
+          description: "Metadata attributes, e.g. [{trait_type: 'Uselessness', value: 'High'}]",
+          items: {
+            type: "object",
+            properties: {
+              trait_type: { type: "string" },
+              value: { type: "string" },
+            },
+            required: ["trait_type", "value"],
+          },
+        },
+        prompt: {
+          type: "string",
+          description: "The user's original request, recorded for the audit trail.",
+        },
+      },
+      required: ["name"],
+    },
+    run: async ({ name, description, recipient, traits, prompt }) => {
+      const mint = await createPendingMint({
+        name,
+        description,
+        recipient,
+        traits,
+        prompt,
+      });
+      return {
+        mintId: mint.id,
+        status: "pending_user_approval",
+        name: mint.name,
+        description: mint.description,
+        recipient: mint.recipient,
+        traits: mint.traits,
+        tokenUri: tokenUriFor(mint.id),
+        contract: getNftContractAddress(),
+        message:
+          "Mint prepared but NOT minted. Show the user the mint card so they can upload an image, edit the name, description and metadata, then press Mint.",
+        nextStep:
+          "Ask the user to review the NFT details in the chat card. The contract call happens only when they press Mint.",
+      };
+    },
+  },
+  {
+    name: "list_nfts",
+    description:
+      "List the NFTs on the UselessNFT contract (Base Sepolia testnet): token id, owner, metadata URI, price and whether it is for sale. Also returns the deployment status and the pending mints that are waiting for the user to approve.",
+    parameters: { type: "object", properties: {} },
+    run: async () => {
+      const status = nftStatus();
+      if (!status.deployed) {
+        return {
+          ...status,
+          nfts: [],
+          pendingMints: listMints("pending"),
+          note: "UselessNFT is not deployed on this chain yet, so there is nothing to list.",
+        };
+      }
+      const nfts = await listOnChainNfts();
+      return {
+        ...status,
+        nfts,
+        pendingMints: listMints("pending"),
+        minted: listMints("minted").map((m) => ({
+          mintId: m.id,
+          tokenId: m.tokenId,
+          name: m.name,
+          txHash: m.txHash,
+        })),
+      };
+    },
+  },
+  {
+    name: "get_nft",
+    description:
+      "Read one NFT from the UselessNFT contract: owner, metadata URI, price, listing state and the metadata document (name, description, image, traits) when the app has it. Params: token_id (number).",
+    parameters: {
+      type: "object",
+      properties: {
+        token_id: { type: "number", description: "The token id to read" },
+      },
+      required: ["token_id"],
+    },
+    run: async ({ token_id }) => {
+      const nft = await readNft(Number(token_id));
+      return { ...nft, contract: getNftContractAddress() };
+    },
+  },
+  {
+    name: "list_nft_for_sale",
+    description:
+      "Put one of the agent's own NFTs up for sale on the UselessNFT contract, priced in USDC. Refuses above the NFT price cap or if KILL_SWITCH=1. Returns the transaction hash. Params: token_id (number), price_usdc (number).",
+    parameters: {
+      type: "object",
+      properties: {
+        token_id: { type: "number", description: "The token id to list" },
+        price_usdc: {
+          type: "number",
+          description: "The asking price in USDC, e.g. 0.05",
+        },
+      },
+      required: ["token_id", "price_usdc"],
+    },
+    run: async ({ token_id, price_usdc }) => {
+      const { txHash } = await listNftForSale(Number(token_id), Number(price_usdc));
+      return {
+        tokenId: Number(token_id),
+        priceUsdc: Number(price_usdc),
+        txHash,
+        explorer: `https://sepolia.basescan.org/tx/${txHash}`,
+        note: "Listed on the UselessNFT contract (Base Sepolia testnet).",
+      };
+    },
+  },
+  {
+    name: "buy_nft",
+    description:
+      "Buy a listed NFT with the agent's own USDC wallet. Approves the contract for the exact price, then calls buy() — the token changes hands and the seller is paid on-chain. Refuses above the NFT price cap or if KILL_SWITCH=1. Params: token_id (number).",
+    parameters: {
+      type: "object",
+      properties: {
+        token_id: { type: "number", description: "The token id to buy" },
+      },
+      required: ["token_id"],
+    },
+    run: async ({ token_id }) => {
+      const { txHash, priceUsdc } = await buyNft(Number(token_id));
+      return {
+        tokenId: Number(token_id),
+        paidUsdc: Number(priceUsdc),
+        txHash,
+        explorer: `https://sepolia.basescan.org/tx/${txHash}`,
+        note: "Bought on the UselessNFT contract with the agent's own USDC (Base Sepolia testnet).",
+      };
+    },
+  },
+];
+
+/** The full tool surface the agent sees: free persona tools + judge/ledger + paid tools + transfers + nfts. */
 export const tools: Tool[] = [
   ...coreTools,
   ...paidTools,
   ...transferTools,
+  ...nftTools,
 ];
 
 // ─── CAP-ENFORCEMENT TEST HOOKS (exposed for direct guardrail verification).
