@@ -142,6 +142,16 @@ ceiling.
 
 `npm run test:transfer-caps` proves both halves of the transfer cap.
 
+**The wallet is put on the right chain first**
+
+Before the extension is asked to sign, the app checks the wallet's chain
+id and switches it to Base Sepolia (`0x14a34`) if it is somewhere else.
+That value is derived from a single `BASE_SEPOLIA_CHAIN_ID` constant, so
+it can never drift — an earlier build hard‑coded `0x2105`, which is
+`8453`, Base **mainnet**, and quietly moved the user to a chain where
+our USDC address holds nothing. `npm run test:user-wallet` asserts the
+switched chain id against the constant.
+
 **Supported assets (Base Sepolia only)**
 
 | Symbol | Contract / type | Aliases accepted |
