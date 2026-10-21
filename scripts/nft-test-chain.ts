@@ -139,6 +139,9 @@ export async function bootNftChain(opts?: { fundUsdc?: boolean }): Promise<TestC
       fs.readFileSync(path.join(root, ".provider-wallet.json"), "utf8"),
     ) as { privateKey: `0x${string}` }
   ).privateKey;
+  // The buyer's key is the well-known FIRST ACCOUNT OF GANACHE'S DEFAULT
+  // TEST MNEMONIC — a public development key that exists to sign throwaway
+  // transactions on a local chain. It holds nothing and is used nowhere else.
   const buyerKey =
     "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d" as const;
 
