@@ -509,6 +509,70 @@ async function main() {
   );
 
   console.log("");
+  console.log("the browser wallet is switched to Base SEPOLIA, not Base mainnet");
+
+  await check(
+    "switchToBaseSepolia requests chain id 84532 (0x14a34), not 8453 (0x2105)",
+    async () => {
+      // 0x2105 is Base *mainnet* (8453). Asking a wallet to switch to
+      // that silently moves the user's money onto the wrong network.
+      // 0x14a34 is Base Sepolia (84532) — the only supported chain.
+      const src = fs.readFileSync(
+        path.join(ORIGINAL_CWD, "lib", "browser-wallet.ts"),
+        "utf8",
+      );
+      // Strip comments: an explanatory note may legitimately MENTION
+      // 0x2105. What matters is what the code actually requests.
+      const code = src
+        .replace(/\/\*[\s\S]*?\*\//g, "")
+        .replace(/(^|[^:])\/\/.*$/gm, "$1");
+      const start = code.indexOf("export async function switchToBaseSepolia");
+      const body = code.slice(start, start + 1200);
+      assert(
+        /0x2105/.test(body) === false,
+        "switchToBaseSepolia must not request 0x2105 (Base mainnet, 8453)",
+      );
+      const match = body.match(/chainId:\s*`0x\$\{[^}]*\}`|chainId:\s*"(0x[0-9a-fA-F]+)"/);
+      if (match) {
+        const hex = match[1];
+        if (hex) {
+          assert(
+            Number.parseInt(hex, 16) === 84532,
+            `switchToBaseSepolia must request 84532, got ${hex} (${Number.parseInt(hex, 16)})`,
+          );
+        } else {
+          assert(
+            /BASE_SEPOLIA_CHAIN_ID/.test(body),
+            "switchToBaseSepolia must derive its chain id from BASE_SEPOLIA_CHAIN_ID",
+          );
+        }
+      } else {
+        throw new Error(
+          "could not find the chainId argument in switchToBaseSepolia",
+        );
+      }
+    },
+  );
+
+  await check(
+    "the wallet client is bound to Base Sepolia's chain id",
+    async () => {
+      const src = fs.readFileSync(
+        path.join(ORIGINAL_CWD, "lib", "browser-wallet.ts"),
+        "utf8",
+      );
+      assert(
+        /BASE_SEPOLIA_CHAIN_ID\s*=\s*84532/.test(src),
+        "BASE_SEPOLIA_CHAIN_ID must be 84532",
+      );
+      assert(
+        /getChainId\(\)[\s\S]{0,200}!==\s*BASE_SEPOLIA_CHAIN_ID/.test(src),
+        "the chain check must compare against BASE_SEPOLIA_CHAIN_ID, not a literal",
+      );
+    },
+  );
+
+  console.log("");
   console.log(`${passed} passed, ${failed} failed`);
   if (failed > 0) process.exitCode = 1;
 }

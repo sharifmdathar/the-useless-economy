@@ -75,7 +75,9 @@ export async function switchToBaseSepolia(): Promise<void> {
   try {
     await provider.request({
       method: "wallet_switchEthereumChain",
-      params: [{ chainId: "0x2105" }], // 84532
+      // 84532 = 0x14a34. Derived from the constant so it can never drift
+      // from BASE_SEPOLIA_CHAIN_ID (0x2105 is Base *mainnet*, 8453).
+      params: [{ chainId: `0x${BASE_SEPOLIA_CHAIN_ID.toString(16)}` }],
     });
   } catch {
     throw new Error(
